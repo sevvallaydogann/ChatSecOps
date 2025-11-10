@@ -3,3 +3,6 @@
 
 # Hassas Bilgi
 .env
+
+# Python Önbellekleri
+__pycache__/
