@@ -11,6 +11,7 @@ from collections import Counter
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 import google.generativeai as genai
+import whois
 
 # [YENİ] Gerekli Kütüphaneler (pip install python-whois dnspython GEREKİR)
 try:
@@ -193,7 +194,7 @@ def get_whois_features(domain: str) -> dict:
 
     features = {"CreationDate": -1, "LastUpdateDate": -1, "RegisteredCountry": "Bilinmiyor"}
     try:
-        w = whois.query(domain)
+        w = whois.whois(domain) # type: ignore
         if w:
             creation_date = w.creation_date
             if isinstance(creation_date, list): creation_date = creation_date[0]

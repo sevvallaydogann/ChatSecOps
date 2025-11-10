@@ -1,0 +1,5 @@
+# Sanal Ortam
+.venv/
+
+# Hassas Bilgi
+.env
