@@ -407,7 +407,7 @@ def enrich_and_summarize_domain(domain_name: str):
     else:
         abuse_data = {"hata": "Domain'e ait IP bulunamadığı için sorgulanamadı."}
 
-#gemini a gidecek
+#gemini a gidecek template
     prompt_template = f"""
 Sen, bir siber güvenlik operasyon merkezinde (SOC) görevli **Kıdemli Tehdit İstihbaratı (TI) Analistisin**.
 
