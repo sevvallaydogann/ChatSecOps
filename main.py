@@ -11,7 +11,12 @@ from collections import Counter
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 import google.generativeai as genai
-import whois
+
+try:
+    from xai_explainer import ModelExplainer
+except Exception as e:
+    print(f"❌ [HATA] XAI Explainer sınıfı içe aktarılamadı: {e}")
+    ModelExplainer = None
 
 # [YENİ] Gerekli Kütüphaneler (pip install python-whois dnspython GEREKİR)
 try:
@@ -82,6 +87,17 @@ try:
 except Exception as e:
     print(f"❌ [HATA] Gemini modeli yüklenemedi: {e}")
     gemini_model = None
+
+# XAI açıklama motorunu yükle
+if ModelExplainer:
+    try:
+        xai_explainer = ModelExplainer('lgbm_domain_classifier.joblib')
+        print("✅ [BAŞARILI] XAI Explainer yüklendi.")
+    except Exception as e:
+        print(f"❌ [HATA] XAI Explainer yüklenemedi: {e}")
+        xai_explainer = None
+else:
+    xai_explainer = None
 
 # IP'den bilgi bulan (ipinfo) servisini kur
 try:
@@ -328,13 +344,26 @@ def get_kendi_risk_skorumuz(domain: str) -> dict:
         prediction = model.predict(final_input_df)[0]
         risk_score_percent = probability[1] * 100 # Zararlı (1) olma ihtimali
 
-        return {
+        explanation_data = None
+        if 'xai_explainer' in globals() and xai_explainer:
+            try:
+                explanation_data = xai_explainer.generate_explanation(final_input_df.copy())
+            except Exception as e:
+                print(f"      ❌ [HATA] XAI açıklaması oluşturulamadı: {e}")
+                explanation_data = {"hata": str(e)}
+
+        response = {
             "tahmin_sinifi": int(prediction),
             "risk_skoru_yuzde": f"{risk_score_percent:.2f}%",
             "tespit_edilen_ip": ip_address,
             "tespit_edilen_ulke": live_feature_dict.get('CountryCode'),
             "model_yorumu": "Bu skor, 90K'lık dataset ile eğitilmiş LightGBM (%99.75) modelimize aittir."
         }
+
+        if explanation_data is not None:
+            response["xai_aciklama"] = explanation_data
+
+        return response
 
     except Exception as e:
         print(f"      ❌ [HATA] Kendi ML Modelimizde hata: {e}")
@@ -379,22 +408,64 @@ def enrich_and_summarize_domain(domain_name: str):
         abuse_data = {"hata": "Domain'e ait IP bulunamadığı için sorgulanamadı."}
 
     prompt_template = f"""
-    Sen kıdemli bir Siber Güvenlik Operasyon Merkezi (SOC) analistisin.
-    Bir domain ({domain_name}) hakkında 3 farklı kaynaktan topladığım ham tehdit istihbarat verilerini JSON formatında aşağıya bırakıyorum.
+Sen, bir siber güvenlik operasyon merkezinde (SOC) görevli **Kıdemli Tehdit İstihbaratı (TI) Analistisin**.
 
-    Görevin:
-    1. Bu verileri analiz et.
-    2. Kısa ve net bir özet paragrafı yaz.
-    3. Net bir **Risk Seviyesi** belirle (Düşük, Orta, Yüksek, Kritik).
-    4. Net bir **Eylem Önerisi** sun (Örn: 'Engellenmeli', 'İzlenmeli', 'Zararsız (Güvenli)').
+Görevin, {domain_name} alan adı hakkında toplanan tüm bilgileri (Harici API'lar, Kendi ML Modelimiz ve XAI Verisi) füzyon yaparak analiz etmek ve eyleme geçirilebilir bir rapor hazırlamaktır.
 
-    Ham Veriler:
-    1. VirusTotal (Domain) Verisi: {vt_data}
-    2. AbuseIPDB (IP) Verisi: {abuse_data}
-    3. Bizim Kendi ML Modelimiz (LightGBM %99.75): {kendi_model_skoru}
 
-    Sadece analist raporunu yaz, başka bir açıklama ekleme.
-    """
+
+--- GİRİŞ VERİLERİ (JSON FORMATINDA) ---
+
+Harici API Verileri:
+1. VirusTotal (Domain): {vt_data}
+2. AbuseIPDB (IP): {abuse_data}
+
+Kendi ML Modelimiz (LightGBM %99.75):
+{kendi_model_skoru}
+
+
+
+--- ANALİZ GEREKSİNİMLERİ ---
+
+Sadece tek bir analiz raporu çıktısı vermelisin. Bu rapor, aşağıdaki 4 temel bölümü içermelidir:
+
+
+
+1.  **TI / ML Karar Özeti:**
+
+    * VirusTotal, AbuseIPDB ve Kendi ML Modelimizin ({kendi_model_skoru.get('risk_skoru_yuzde', 'N/A')}) sonuçlarını tek bir paragrafta birleştir.
+
+    * **Ana Odak:** Karar verme sürecindeki belirsizlikleri (Örn: AbuseIPDB'de skor 0 iken ML'in yüksek skor vermesi gibi) netleştir.
+
+
+
+2.  **Modelin Karar Gerekçesi (XAI Analizi):**
+
+    * 'xai_aciklama' altındaki verileri kullanarak, ML modelinin neden bu risk skoruna ulaştığını açıkla.
+
+    * **Zararlıya İten (Pozitif) Özellikler:** Modelin risk skorunu en çok artıran ilk 3 özellik (Örn: TLD_Grouped_xyz, ASN, Entropy) ve bu özelliklerin değerleri nelerdir?
+
+    * **Güvenliye İten (Negatif) Özellikler:** Modelin zararsız olduğuna en çok ikna eden (skoru düşüren) ilk 3 özellik nelerdir?
+
+
+
+3.  **Risk Sınıflandırması:**
+
+    * Tüm verileri dikkate alarak net bir **Risk Seviyesi** belirle. (Sadece şu terimlerden birini kullan: DÜŞÜK, ORTA, YÜKSEK, KRİTİK).
+
+
+
+4.  **Eylem Önerisi (SOAR Kararı):**
+
+    * SOC operatörünün hemen uygulayabileceği net bir aksiyon sun. (Sadece şu terimlerden birini kullan: ENGELLEME, İZLEME, GÜVENLİ).
+
+
+
+--- RAPOR FORMATI ---
+
+Cevabını doğrudan rapor içeriğiyle başlat. Başlık ve alt başlıklar kullanma. Tüm bilgiyi, analizin mantıksal akışını takip eden tek bir metin bloğu olarak sun.
+
+"""
 
     print(f"      [>] Gemini AI sorgulanıyor...")
 
