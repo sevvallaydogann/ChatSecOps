@@ -1,0 +1,8 @@
+# Sanal Ortam
+.venv/
+
+# Hassas Bilgi
+.env
+
+# Python Önbellekleri
+__pycache__/
