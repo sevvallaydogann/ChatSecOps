@@ -327,31 +327,80 @@ def get_kendi_risk_skorumuz(domain: str) -> dict:
 
         # 3. Adım: Eğitim Sütunları ile Hizalama
         final_input_df = pd.DataFrame(columns=TRAINING_COLUMNS)
-        # Sütunları hizalamak için reindex kullanmak daha güvenli ve hızlıdır
         final_input_df = input_df_ohe.reindex(columns=TRAINING_COLUMNS, fill_value=0)
 
         # 4. Adım: Veriyi Ölçeklendir (Scaler)
-        # (Sadece 18 sayısal sütunu ölçeklendir)
         final_input_df[COLUMNS_TO_SCALE] = scaler.transform(final_input_df[COLUMNS_TO_SCALE])
 
         print("      [>] Model için 284 sütunluk canlı veri hazırlandı ve ölçeklendirildi.")
 
         # 5. Adım: Modele tahminde bulundur
-        # Sütun adlarının LightGBM için uyumlu olduğundan emin ol (örn: boşluk, özel karakter)
         final_input_df.columns = [re.sub(r'[^A-Za-z0-9_]+', '', col) for col in final_input_df.columns]
 
         probability = model.predict_proba(final_input_df)[0]
         prediction = model.predict(final_input_df)[0]
-        risk_score_percent = probability[1] * 100 # Zararlı (1) olma ihtimali
+        risk_score_percent = probability[1] * 100
 
+        # === XAI KISMI - GÜNCELLEME ===
         explanation_data = None
-        if 'xai_explainer' in globals() and xai_explainer:
+        
+        if xai_explainer is not None:
             try:
-                explanation_data = xai_explainer.generate_explanation(final_input_df.copy())
+                print("      [>] XAI (SHAP) açıklaması oluşturuluyor...")
+                
+                # XAI explainer'dan açıklama al
+                raw_explanation = xai_explainer.generate_explanation(final_input_df.copy())
+                
+                # DEBUG
+                print(f"      [DEBUG] XAI ham veri keys: {raw_explanation.keys() if isinstance(raw_explanation, dict) else 'Not a dict'}")
+                
+                # Mevcut xai_explainer.py formatı: 'top_5_positive_features' ve 'top_5_negative_features'
+                if isinstance(raw_explanation, dict):
+                    pos_features = raw_explanation.get('top_5_positive_features', [])
+                    neg_features = raw_explanation.get('top_5_negative_features', [])
+                    
+                    print(f"      [DEBUG] Pozitif features: {len(pos_features)}, Negatif features: {len(neg_features)}")
+                    
+                    # İki listeyi birleştir ve standart formata dönüştür
+                    combined_features = []
+                    
+                    # Pozitif features ekle
+                    for feat in pos_features:
+                        combined_features.append({
+                            'feature': feat['feature'],
+                            'shap_value': feat['shap_value'],
+                            'impact': 'positive'
+                        })
+                    
+                    # Negatif features ekle
+                    for feat in neg_features:
+                        combined_features.append({
+                            'feature': feat['feature'],
+                            'shap_value': feat['shap_value'],
+                            'impact': 'negative'
+                        })
+                    
+                    # Standart format oluştur
+                    explanation_data = {
+                        'top_features': combined_features,
+                        'explanation_method': 'SHAP TreeExplainer',
+                        'total_features': len(combined_features)
+                    }
+                    
+                    print(f"      [✅] XAI açıklaması başarıyla alındı ({len(combined_features)} features).")
+                else:
+                    print(f"      [⚠️] XAI beklenmedik format: {type(raw_explanation)}")
+                    explanation_data = None
+                    
             except Exception as e:
                 print(f"      ❌ [HATA] XAI açıklaması oluşturulamadı: {e}")
-                explanation_data = {"hata": str(e)}
+                import traceback
+                traceback.print_exc()
+                explanation_data = None
+        else:
+            print("      [⚠️] XAI Explainer yüklenmedi, açıklama atlanıyor.")
 
+        # === RESPONSE OLUŞTUR ===
         response = {
             "tahmin_sinifi": int(prediction),
             "risk_skoru_yuzde": f"{risk_score_percent:.2f}%",
@@ -360,44 +409,151 @@ def get_kendi_risk_skorumuz(domain: str) -> dict:
             "model_yorumu": "Bu skor, 90K'lık dataset ile eğitilmiş LightGBM (%99.75) modelimize aittir."
         }
 
-        if explanation_data is not None:
+        # XAI verisi varsa ekle
+        if explanation_data is not None and explanation_data:
             response["xai_aciklama"] = explanation_data
+        else:
+            response["xai_aciklama"] = {
+                "hata": "XAI verileri oluşturulamadı",
+                "top_features": []
+            }
 
         return response
+
+    except Exception as e:
+        print(f"      ❌ [HATA] Kendi ML Modelimizde hata: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"hata": str(e)}
 
     except Exception as e:
         print(f"      ❌ [HATA] Kendi ML Modelimizde hata: {e}")
         import traceback; traceback.print_exc()
         return {"hata": str(e)}
 
+def generate_fallback_summary(domain_name: str, vt_data: dict, abuse_data: dict, kendi_model_skoru: dict) -> str:
+    """
+    Gemini hata verdiğinde otomatik olarak kullanılacak yedek rapor.
+    ML + XAI sonuçlarını yapılandırılmış formatta sunar.
+    """
+    
+    # Risk skorunu çıkar
+    risk_score = kendi_model_skoru.get("risk_skoru_yuzde", "N/A")
+    try:
+        risk_num = float(risk_score.replace("%", ""))
+        if risk_num >= 80:
+            risk_level = "KRİTİK"
+            action = "ENGELLEME"
+        elif risk_num >= 50:
+            risk_level = "YÜKSEK"
+            action = "İZLEME"
+        elif risk_num >= 20:
+            risk_level = "ORTA"
+            action = "İZLEME"
+        else:
+            risk_level = "DÜŞÜK"
+            action = "GÜVENLİ"
+    except:
+        risk_level = "BİLİNMİYOR"
+        action = "MANUEL İNCELEME"
+    
+    # VirusTotal sonuçları
+    vt_status = "N/A"
+    if "hata" not in vt_data:
+        vt_malicious = vt_data.get("malicious", 0)
+        vt_total = sum(vt_data.values())
+        vt_status = f"{vt_malicious}/{vt_total}"
+    
+    # AbuseIPDB sonuçları
+    abuse_status = "N/A"
+    if "hata" not in abuse_data:
+        abuse_score = abuse_data.get("abuseConfidenceScore", 0)
+        abuse_status = f"{abuse_score}%"
+    
+    # XAI Analizi
+    xai_summary = "XAI verileri mevcut değil."
+    xai_data = kendi_model_skoru.get("xai_aciklama", {})
+    
+    if xai_data and "hata" not in xai_data:
+        top_features = xai_data.get("top_features", [])
+        
+        if top_features and len(top_features) > 0:
+            # Pozitif (risk artıran) ve negatif (risk azaltan) features'ları ayır
+            positive_features = [f for f in top_features if f.get('impact') == 'positive']
+            negative_features = [f for f in top_features if f.get('impact') == 'negative']
+            
+            xai_summary = "Modelin karar gerekçesi (SHAP analizi):\n\n"
+            
+            # Pozitif features (risk artıran)
+            if positive_features:
+                xai_summary += "📈 Risk Skorunu ARTIRAN Özellikler:\n"
+                for i, feat in enumerate(positive_features[:3], 1):
+                    feat_name = feat.get('feature', 'N/A')
+                    shap_val = feat.get('shap_value', 0)
+                    xai_summary += f"  {i}. {feat_name} (SHAP: +{shap_val:.4f})\n"
+                xai_summary += "\n"
+            
+            # Negatif features (risk azaltan)
+            if negative_features:
+                xai_summary += "📉 Risk Skorunu AZALTAN Özellikler:\n"
+                for i, feat in enumerate(negative_features[:3], 1):
+                    feat_name = feat.get('feature', 'N/A')
+                    shap_val = feat.get('shap_value', 0)
+                    xai_summary += f"  {i}. {feat_name} (SHAP: {shap_val:.4f})\n"
+            
+            if not positive_features and not negative_features:
+                xai_summary = "XAI verileri mevcut ama feature'lar ayrıştırılamadı."
+        else:
+            xai_summary = "XAI verileri mevcut ama top features bulunamadı."
+    else:
+        error_msg = xai_data.get("hata", "Bilinmeyen hata") if xai_data else "Veri yok"
+        xai_summary = f"XAI verileri oluşturulamadı: {error_msg}"
+    
+    # Yedek rapor oluştur
+    fallback_report = f"""
+⚠️ [LLM GEÇİCİ OLARAK KULLANILAMADI - OTOMATIK RAPOR]
 
-# --- 4. ANA API ENDPOINT (Tümünü Birleştiren Yer) ---
-@app.on_event("startup")
-def startup_event():
-    if not model or not scaler:
-        print("!!! [UYARI] ML Modeli/Scaler yüklenemedi. ML skoru hesaplanamayacak.")
-    if not gemini_model:
-        print("!!! [UYARI] Gemini Modeli yüklenemedi. AI özeti oluşturulamayacak.")
-    if not whois or not dns:
-        print("!!! [UYARI] 'whois' veya 'dnspython' yüklenemedi. ML skoru eksik özelliklerle hesaplanacak.")
-    if not TRAINING_COLUMNS or len(TRAINING_COLUMNS) != 284:
-        print("!!! [KRİTİK HATA] 'TRAINING_COLUMNS' listesi 'main.py' içinde 284 sütun değil!")
-    if not TOP_30_TLDS or len(TOP_30_TLDS) != 30:
-        print("!!! [KRİTİK HATA] 'TOP_30_TLDS' listesi 'main.py' içinde 30 TLD değil!")
+=== TI / ML KARAR ÖZETİ ===
 
-    print("[BİLGİ] Sunucu başlatma işlemleri tamamlandı. İstekler dinleniyor...")
+Domain: {domain_name}
 
-@app.get("/")
-def read_root():
-    return {"status": "ChatSecOps SOAR Motoru (LGBM Modelli) çalışıyor."}
+Harici Kaynaklar:
+• VirusTotal: {vt_status} zararlı tespit
+• AbuseIPDB: Güven Skoru {abuse_status}
+
+Kendi ML Modelimiz (LightGBM %99.75):
+• Risk Skoru: {risk_score}
+• Risk Seviyesi: {risk_level}
+• Tespit Edilen IP: {kendi_model_skoru.get('tespit_edilen_ip', 'N/A')}
+• Ülke: {kendi_model_skoru.get('tespit_edilen_ulke', 'N/A')}
+
+=== XAI ANALİZİ ===
+
+{xai_summary}
+
+=== RİSK SINIFLANDIRMASI ===
+
+{risk_level}
+
+=== EYLEM ÖNERİSİ ===
+
+{action}
+
+---
+ℹ️ Bu rapor, LLM servisi kullanılamadığında otomatik olarak üretilmiştir.
+   Tüm teknik veriler (TI, ML, XAI) yukarıda sunulmuştur.
+"""
+    
+    return fallback_report
+
+
+# Şimdi enrich_and_summarize_domain fonksiyonunu güncelleyin:
 
 @app.get("/enrich-and-summarize/domain/{domain_name}")
 def enrich_and_summarize_domain(domain_name: str):
     print(f"\n[!] YENİ İSTEK ALINDI: DOMAIN = {domain_name}")
 
-    if not gemini_model:
-        raise HTTPException(status_code=500, detail="Gemini AI Modeli yüklenemedi.")
-
+    # TI ve ML verilerini topla
     vt_data = get_virustotal_data(domain_name)
     kendi_model_skoru = get_kendi_risk_skorumuz(domain_name)
 
@@ -407,13 +563,11 @@ def enrich_and_summarize_domain(domain_name: str):
     else:
         abuse_data = {"hata": "Domain'e ait IP bulunamadığı için sorgulanamadı."}
 
-#gemini a gidecek template
+    # Gemini prompt (aynı kalıyor)
     prompt_template = f"""
 Sen, bir siber güvenlik operasyon merkezinde (SOC) görevli **Kıdemli Tehdit İstihbaratı (TI) Analistisin**.
 
 Görevin, {domain_name} alan adı hakkında toplanan tüm bilgileri (Harici API'lar, Kendi ML Modelimiz ve XAI Verisi) füzyon yaparak analiz etmek ve eyleme geçirilebilir bir rapor hazırlamaktır.
-
-
 
 --- GİRİŞ VERİLERİ (JSON FORMATINDA) ---
 
@@ -424,67 +578,69 @@ Harici API Verileri:
 Kendi ML Modelimiz (LightGBM %99.75):
 {kendi_model_skoru}
 
-
-
 --- ANALİZ GEREKSİNİMLERİ ---
 
 Sadece tek bir analiz raporu çıktısı vermelisin. Bu rapor, aşağıdaki 4 temel bölümü içermelidir:
 
-
-
 1.  **TI / ML Karar Özeti:**
-
     * VirusTotal, AbuseIPDB ve Kendi ML Modelimizin ({kendi_model_skoru.get('risk_skoru_yuzde', 'N/A')}) sonuçlarını tek bir paragrafta birleştir.
-
     * **Ana Odak:** Karar verme sürecindeki belirsizlikleri (Örn: AbuseIPDB'de skor 0 iken ML'in yüksek skor vermesi gibi) netleştir.
 
-
-
 2.  **Modelin Karar Gerekçesi (XAI Analizi):**
-
     * 'xai_aciklama' altındaki verileri kullanarak, ML modelinin neden bu risk skoruna ulaştığını açıkla.
-
     * **Zararlıya İten (Pozitif) Özellikler:** Modelin risk skorunu en çok artıran ilk 3 özellik (Örn: TLD_Grouped_xyz, ASN, Entropy) ve bu özelliklerin değerleri nelerdir?
-
     * **Güvenliye İten (Negatif) Özellikler:** Modelin zararsız olduğuna en çok ikna eden (skoru düşüren) ilk 3 özellik nelerdir?
 
-
-
 3.  **Risk Sınıflandırması:**
-
     * Tüm verileri dikkate alarak net bir **Risk Seviyesi** belirle. (Sadece şu terimlerden birini kullan: DÜŞÜK, ORTA, YÜKSEK, KRİTİK).
 
-
-
 4.  **Eylem Önerisi (SOAR Kararı):**
-
     * SOC operatörünün hemen uygulayabileceği net bir aksiyon sun. (Sadece şu terimlerden birini kullan: ENGELLEME, İZLEME, GÜVENLİ).
-
-
 
 --- RAPOR FORMATI ---
 
 Cevabını doğrudan rapor içeriğiyle başlat. Başlık ve alt başlıklar kullanma. Tüm bilgiyi, analizin mantıksal akışını takip eden tek bir metin bloğu olarak sun.
-
 """
 
     print(f"      [>] Gemini AI sorgulanıyor...")
 
+    # Gemini çağrısı - HATA YÖNETİMİ İLE
+    ai_summary = None
+    gemini_error = None
+    
     try:
+        if not gemini_model:
+            raise Exception("Gemini modeli başlangıçta yüklenemedi.")
+        
         response = gemini_model.generate_content(prompt_template)
         ai_summary = response.text.strip()
         print(f"      [✅] Gemini AI yanıtı alındı.")
-
-        return {
-            "domain": domain_name,
-            "ai_ozeti": ai_summary,
-            "ham_veriler": {
-                "virustotal": vt_data,
-                "abuseipdb": abuse_data,
-                "kendi_modelimiz": kendi_model_skoru
-            }
-        }
-
+    
     except Exception as e:
-        print(f"      ❌ [HATA] Gemini AI sorgusunda hata: {e}")
-        raise HTTPException(status_code=500, detail=f"Gemini analizi sırasında hata: {e}")
+        gemini_error = str(e)
+        print(f"      [⚠️] Gemini AI hatası: {e}")
+        print(f"      [>] Yedek rapor oluşturuluyor...")
+        
+        # YEDEK RAPOR OLUŞTUR
+        ai_summary = generate_fallback_summary(domain_name, vt_data, abuse_data, kendi_model_skoru)
+        print(f"      [✅] Yedek rapor başarıyla oluşturuldu.")
+
+    # Yanıtı döndür
+    response_data = {
+        "domain": domain_name,
+        "ai_ozeti": ai_summary,
+        "ham_veriler": {
+            "virustotal": vt_data,
+            "abuseipdb": abuse_data,
+            "kendi_modelimiz": kendi_model_skoru
+        }
+    }
+    
+    # Eğer Gemini hata verdiyse bunu belirt
+    if gemini_error:
+        response_data["llm_status"] = "fallback"
+        response_data["llm_error"] = gemini_error
+    else:
+        response_data["llm_status"] = "success"
+    
+    return response_data
