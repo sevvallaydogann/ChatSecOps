@@ -6,11 +6,21 @@ import pandas as pd
 import ipinfo
 import socket
 import re
+from ChatSecOps_Intelligence import intel_engine
 from math import log2
 from collections import Counter
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
 import google.generativeai as genai
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
 
 try:
     from xai_explainer import ModelExplainer
@@ -32,19 +42,25 @@ import time
 
 # --- [VERİ SETİNDEN ALINAN BİLGİLER - DOLDURULDU] ---
 
-# [YENİ] Ölçeklendirilecek 18 adet sayısal sütun (Colab'den alındı)
-COLUMNS_TO_SCALE = [
-    'ConsoantRatio', 'NumericRatio', 'SpecialCharRatio', 'VowelRatio',
-    'Ip', 'CreationDate', 'LastUpdateDate', 'ASN', 'HttpResponseCode',
-    'SubdomainNumber', 'Entropy', 'EntropyOfSubDomains', 'StrangeCharacters',
-    'ConsoantSequence', 'VowelSequence', 'NumericSequence', 'SpecialCharSequence',
-    'DomainLength'
-]
+# --- [DİNAMİK MODEL YAPILANDIRMASI] ---
+import json
 
-# [YENİ] Modelin eğitildiği 284 sütunun tam listesi (Colab'den alındı)
-TRAINING_COLUMNS = [
-    'MXDnsResponse', 'TXTDnsResponse', 'HasSPFInfo', 'HasDkimInfo', 'HasDmarcInfo', 'Ip', 'DomainInAlexaDB', 'CommonPorts', 'CreationDate', 'LastUpdateDate', 'ASN', 'HttpResponseCode', 'SubdomainNumber', 'Entropy', 'EntropyOfSubDomains', 'StrangeCharacters', 'IpReputation', 'DomainReputation', 'ConsoantRatio', 'NumericRatio', 'SpecialCharRatio', 'VowelRatio', 'ConsoantSequence', 'VowelSequence', 'NumericSequence', 'SpecialCharSequence', 'DomainLength', 'DNSRecordType_A', 'DNSRecordType_CNAME', 'DNSRecordType_MX', 'CountryCode_AD', 'CountryCode_AE', 'CountryCode_AL', 'CountryCode_AR', 'CountryCode_AT', 'CountryCode_AU', 'CountryCode_BA', 'CountryCode_BD', 'CountryCode_BE', 'CountryCode_BG', 'CountryCode_BO', 'CountryCode_BR', 'CountryCode_BS', 'CountryCode_BY', 'CountryCode_Bilinmiyor', 'CountryCode_CA', 'CountryCode_CH', 'CountryCode_CI', 'CountryCode_CL', 'CountryCode_CM', 'CountryCode_CN', 'CountryCode_CO', 'CountryCode_CR', 'CountryCode_CU', 'CountryCode_CW', 'CountryCode_CY', 'CountryCode_CZ', 'CountryCode_DE', 'CountryCode_DK', 'CountryCode_DO', 'CountryCode_DZ', 'CountryCode_EC', 'CountryCode_EE', 'CountryCode_EG', 'CountryCode_ES', 'CountryCode_FI', 'CountryCode_FR', 'CountryCode_GB', 'CountryCode_GE', 'CountryCode_GH', 'CountryCode_GR', 'CountryCode_GT', 'CountryCode_HK', 'CountryCode_HR', 'CountryCode_HU', 'CountryCode_ID', 'CountryCode_IE', 'CountryCode_IL', 'CountryCode_IN', 'CountryCode_IR', 'CountryCode_IS', 'CountryCode_IT', 'CountryCode_JP', 'CountryCode_KE', 'CountryCode_KG', 'CountryCode_KR', 'CountryCode_KY', 'CountryCode_KZ', 'CountryCode_LA', 'CountryCode_LK', 'CountryCode_LT', 'CountryCode_LU', 'CountryCode_LV', 'CountryCode_MA', 'CountryCode_MD', 'CountryCode_MK', 'CountryCode_MN', 'CountryCode_MX', 'CountryCode_MY', 'CountryCode_NC', 'CountryCode_NG', 'CountryCode_NL', 'CountryCode_NO', 'CountryCode_NP', 'CountryCode_NZ', 'CountryCode_OM', 'CountryCode_PA', 'CountryCode_PE', 'CountryCode_PG', 'CountryCode_PH', 'CountryCode_PK', 'CountryCode_PL', 'CountryCode_PS', 'CountryCode_PT', 'CountryCode_PY', 'CountryCode_QA', 'CountryCode_RO', 'CountryCode_RS', 'CountryCode_RU', 'CountryCode_SC', 'CountryCode_SE', 'CountryCode_SG', 'CountryCode_SI', 'CountryCode_SK', 'CountryCode_SN', 'CountryCode_SY', 'CountryCode_TH', 'CountryCode_TN', 'CountryCode_TR', 'CountryCode_TW', 'CountryCode_UA', 'CountryCode_UG', 'CountryCode_US', 'CountryCode_UZ', 'CountryCode_VE', 'CountryCode_VG', 'CountryCode_VN', 'CountryCode_ZA', 'CountryCode_ZW', 'RegisteredCountry_AD', 'RegisteredCountry_AE', 'RegisteredCountry_AL', 'RegisteredCountry_AT', 'RegisteredCountry_AU', 'RegisteredCountry_BA', 'RegisteredCountry_BD', 'RegisteredCountry_BE', 'RegisteredCountry_BG', 'RegisteredCountry_BR', 'RegisteredCountry_BY', 'RegisteredCountry_BZ', 'RegisteredCountry_Bilinmiyor', 'RegisteredCountry_CA', 'RegisteredCountry_CH', 'RegisteredCountry_CI', 'RegisteredCountry_CM', 'RegisteredCountry_CN', 'RegisteredCountry_CR', 'RegisteredCountry_CY', 'RegisteredCountry_CZ', 'RegisteredCountry_DE', 'RegisteredCountry_DK', 'RegisteredCountry_DZ', 'RegisteredCountry_EE', 'RegisteredCountry_EG', 'RegisteredCountry_ES', 'RegisteredCountry_EU', 'RegisteredCountry_Es', 'RegisteredCountry_FI', 'RegisteredCountry_FR', 'RegisteredCountry_GB', 'RegisteredCountry_GE', 'RegisteredCountry_GI', 'RegisteredCountry_GR', 'RegisteredCountry_HK', 'RegisteredCountry_HR', 'RegisteredCountry_HU', 'RegisteredCountry_ID', 'RegisteredCountry_IE', 'RegisteredCountry_IL', 'RegisteredCountry_IM', 'RegisteredCountry_IN', 'RegisteredCountry_IR', 'RegisteredCountry_IS', 'RegisteredCountry_IT', 'RegisteredCountry_JP', 'RegisteredCountry_KE', 'RegisteredCountry_KG', 'RegisteredCountry_KR', 'RegisteredCountry_KY', 'RegisteredCountry_KZ', 'RegisteredCountry_LI', 'RegisteredCountry_LK', 'RegisteredCountry_LT', 'RegisteredCountry_LU', 'RegisteredCountry_LV', 'RegisteredCountry_MA', 'RegisteredCountry_MD', 'RegisteredCountry_MK', 'RegisteredCountry_MN', 'RegisteredCountry_MR', 'RegisteredCountry_MU', 'RegisteredCountry_MY', 'RegisteredCountry_NC', 'RegisteredCountry_NG', 'RegisteredCountry_NL', 'RegisteredCountry_NO', 'RegisteredCountry_NP', 'RegisteredCountry_NZ', 'RegisteredCountry_OM', 'RegisteredCountry_PG', 'RegisteredCountry_PH', 'RegisteredCountry_PK', 'RegisteredCountry_PL', 'RegisteredCountry_PS', 'RegisteredCountry_PT', 'RegisteredCountry_QA', 'RegisteredCountry_RO', 'RegisteredCountry_RS', 'RegisteredCountry_RU', 'RegisteredCountry_Ro', 'RegisteredCountry_SA', 'RegisteredCountry_SC', 'RegisteredCountry_SE', 'RegisteredCountry_SG', 'RegisteredCountry_SI', 'RegisteredCountry_SK', 'RegisteredCountry_SM', 'RegisteredCountry_SN', 'RegisteredCountry_SY', 'RegisteredCountry_TH', 'RegisteredCountry_TN', 'RegisteredCountry_TR', 'RegisteredCountry_TW', 'RegisteredCountry_UA', 'RegisteredCountry_UG', 'RegisteredCountry_US', 'RegisteredCountry_UZ', 'RegisteredCountry_VN', 'RegisteredCountry_YU', 'RegisteredCountry_ZA', 'RegisteredCountry_ZW', 'RegisteredCountry_de', 'RegisteredCountry_dk', 'RegisteredCountry_es', 'RegisteredCountry_fr', 'RegisteredCountry_md', 'RegisteredCountry_ro', 'RegisteredCountry_ru', 'RegisteredCountry_tr', 'RegisteredCountry_ua', 'RegisteredCountry_us', 'RegisteredCountry_vn', 'TLD_Grouped_TLD_Other', 'TLD_Grouped_bid', 'TLD_Grouped_biz', 'TLD_Grouped_blogspot.com', 'TLD_Grouped_ca', 'TLD_Grouped_cl', 'TLD_Grouped_cn', 'TLD_Grouped_co.uk', 'TLD_Grouped_co.za', 'TLD_Grouped_com', 'TLD_Grouped_com.au', 'TLD_Grouped_com.br', 'TLD_Grouped_cz', 'TLD_Grouped_de', 'TLD_Grouped_es', 'TLD_Grouped_eu', 'TLD_Grouped_fr', 'TLD_Grouped_in', 'TLD_Grouped_info', 'TLD_Grouped_it', 'TLD_Grouped_net', 'TLD_Grouped_nl', 'TLD_Grouped_online', 'TLD_Grouped_org', 'TLD_Grouped_pl', 'TLD_Grouped_ro', 'TLD_Grouped_ru', 'TLD_Grouped_sx.cn', 'TLD_Grouped_top', 'TLD_Grouped_us', 'TLD_Grouped_xyz'
-]
+METADATA_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833_metadata.json'
+
+try:
+    with open(METADATA_PATH, 'r', encoding='utf-8') as f:
+        meta = json.load(f)
+        
+    # Metadata'dan listeleri çekiyoruz
+    TRAINING_COLUMNS = meta['dataset_info']['feature_names']
+    COLUMNS_TO_SCALE = meta['preprocessing']['columns_to_scale']
+    TOP_30_TLDS = meta['preprocessing']['top_30_tlds']
+    
+    print(f"✅ [BAŞARILI] Model yapılandırması metadata'dan yüklendi ({len(TRAINING_COLUMNS)} sütun).")
+except Exception as e:
+    print(f"❌ [KRİTİK HATA] Metadata yüklenemedi: {e}")
+    # Hata durumunda sistemin çökmemesi için boş listeler (isteğe bağlı)
+    TRAINING_COLUMNS, COLUMNS_TO_SCALE, TOP_30_TLDS = [], [], []
 
 # [YENİ] TLD Gruplaması için Top 30 listesi (Colab'den alındı)
 TOP_30_TLDS = [
@@ -66,13 +82,31 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 app = FastAPI(title="ChatSecOps SOAR Motoru")
 
+# ============================================================================
 # ML Modelimizi (LGBM) ve Scaler'ı diskten yükle
+# ============================================================================
+
+# Yeni dosya yollarını buraya tanımlıyoruz
+MODEL_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833.joblib'
+SCALER_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833_scaler.joblib'
+METADATA_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833_metadata.json'
+
 try:
-    model = joblib.load('lgbm_domain_classifier.joblib')
-    scaler = joblib.load('data_scaler.joblib')
-    print("✅ [BAŞARILI] ML Modeli (LightGBM) ve Scaler (data_scaler.joblib) başarıyla yüklendi.")
+    # 1. Modeli ve Scaler'ı Yükle
+    model = joblib.load(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
+    
+    # 2. Metadata'yı Yükle (Sütun isimlerini dinamik almak için çok önemli)
+    with open(METADATA_PATH, 'r', encoding='utf-8') as f:
+        meta = json.load(f)
+        # Eğer main.py içinde TRAINING_COLUMNS kullanıyorsan burayı eşitlemelisin:
+        TRAINING_COLUMNS = meta['dataset_info']['feature_names']
+    
+    print(f"✅ [BAŞARILI] LightGBM Modeli ve Scaler başarıyla yüklendi.")
+    print(f"📊 Model Versiyonu: {meta['model_info']['version']} | Sütun Sayısı: {len(TRAINING_COLUMNS)}")
+
 except FileNotFoundError:
-    print("❌ [HATA] 'lgbm_domain_classifier.joblib' veya 'data_scaler.joblib' bulunamadı.")
+    print(f"❌ [HATA] Model dosyaları belirtilen yolda bulunamadı!")
     model, scaler = None, None
 except Exception as e:
     print(f"❌ [HATA] Model yüklenirken beklenmedik hata: {e}")
@@ -91,7 +125,7 @@ except Exception as e:
 # XAI açıklama motorunu yükle
 if ModelExplainer:
     try:
-        xai_explainer = ModelExplainer('lgbm_domain_classifier.joblib')
+        xai_explainer = ModelExplainer(MODEL_PATH)
         print("✅ [BAŞARILI] XAI Explainer yüklendi.")
     except Exception as e:
         print(f"❌ [HATA] XAI Explainer yüklenemedi: {e}")
@@ -303,7 +337,7 @@ def get_live_features_for_model(domain: str) -> (dict, str | None):
 
 
 def get_kendi_risk_skorumuz(domain: str) -> dict:
-    print(f"      [>] Kendi ML Modelimiz (LightGBM %99.75) sorgulanıyor...")
+    print(f"      [>] Kendi ML Modelimiz (LightGBM) sorgulanıyor...")
 
     if not model or not scaler:
         return {"hata": "ML Modeli (LGBM) veya Scaler (data_scaler) yüklenemedi."}
@@ -551,7 +585,8 @@ Kendi ML Modelimiz (LightGBM %99.75):
 
 @app.get("/enrich-and-summarize/domain/{domain_name}")
 def enrich_and_summarize_domain(domain_name: str):
-    print(f"\n[!] YENİ İSTEK ALINDI: DOMAIN = {domain_name}")
+    logger.info(f"YENİ İSTEK ALINDI: Domain = {domain_name}")
+    start_time = time.time()
 
     # TI ve ML verilerini topla
     vt_data = get_virustotal_data(domain_name)
@@ -601,7 +636,7 @@ Sadece tek bir analiz raporu çıktısı vermelisin. Bu rapor, aşağıdaki 4 te
 
 Cevabını doğrudan rapor içeriğiyle başlat. Başlık ve alt başlıklar kullanma. Tüm bilgiyi, analizin mantıksal akışını takip eden tek bir metin bloğu olarak sun.
 """
-
+    prompt_template += intel_engine.get_hunting_logic()
     print(f"      [>] Gemini AI sorgulanıyor...")
 
     # Gemini çağrısı - HATA YÖNETİMİ İLE
@@ -643,4 +678,6 @@ Cevabını doğrudan rapor içeriğiyle başlat. Başlık ve alt başlıklar kul
     else:
         response_data["llm_status"] = "success"
     
+    execution_time = round(time.time() - start_time, 2)
+    logger.info(f"Analiz tamamlandı ({domain_name}): {execution_time} sn.")
     return response_data

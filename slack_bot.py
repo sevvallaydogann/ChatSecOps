@@ -10,9 +10,11 @@ Backend API (main.py) ile REST üzerinden haberleşir.
 
 import os
 import requests
+import re
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
+from ChatSecOps_Intelligence import intel_engine
 
 # Ortam değişkenlerini yükle
 load_dotenv()
@@ -94,6 +96,24 @@ def format_risk_message(data: dict) -> dict:
             }
         }
     ]
+    screenshot_url = intel_engine.get_visual_evidence(domain)
+
+    # BLOKLARI DAHA GÜVENLİ EKLEYELİM
+    # Slack bazen resmi indiremezse hata verir, bu yüzden image bloğunu ayrı ekliyoruz
+    blocks.append({
+        "type": "section",
+        "text": {
+            "type": "mrkdwn",
+            "text": f"🌐 *Görsel Kanıt (Web Preview):* <{screenshot_url}|Görüntüyü Tarayıcıda Aç>"
+        }
+    })
+
+    # İsteğe bağlı: Hala resim olarak denemek istersen ama hata riskini azaltmak için:
+    blocks.append({
+        "type": "image",
+        "image_url": screenshot_url,
+        "alt_text": "Site Preview"
+    })
     
     # Eğer fallback modundaysa uyarı ekle
     if is_fallback:
@@ -199,17 +219,21 @@ def status_command(message, say):
 def analyze_domain(message, say):
     """Domain analizi yap"""
     text = message.get("text", "")
-    
-    # Domain'i ayıkla
     words = text.split()
+    
     if len(words) < 2:
-        say("❌ *Hata:* Lütfen analiz edilecek domain'i belirtin.\n*Örnek:* `analyze example.com`")
+        say("❌ *Hata:* Lütfen bir domain belirtin.")
         return
     
-    domain = words[1].strip()
-    
-    # İşlem başladı mesajı
-    say(f"🔍 *{domain}* analiz ediliyor, lütfen bekleyin...\n_Bu işlem 10-30 saniye sürebilir._")
+    # --- [YENİ: SLACK LİNK TEMİZLEME KODU] ---
+    raw_domain = words[1].strip()
+    # Slack linklerini temizle: <http://google.com|google.com> -> google.com
+    domain = re.sub(r"<http[s]?://[^|]+\|([^>]+)>", r"\1", raw_domain)
+    # Eğer link değil de düz metinse ama < > içindeyse yine temizle
+    domain = domain.replace("<", "").replace(">", "").replace("http://", "").replace("https://", "")
+    # ----------------------------------------
+
+    say(f"🔍 *{domain}* analiz ediliyor, lütfen bekleyin...")
     
     try:
         # Backend API'ye istek gönder
