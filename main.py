@@ -4,10 +4,14 @@ import requests
 import joblib
 import pandas as pd
 import ipinfo
+import uuid
+from datetime import datetime
 import socket
 import re
 from ChatSecOps_Intelligence import intel_engine
 from math import log2
+from ChatSecOps_Memory import memory_engine, format_memory_insights, format_similar_domains
+from ChatSecOps_Intelligence import intel_engine, enrich_with_osint, format_osint_results, intel_engine
 from collections import Counter
 from fastapi import FastAPI, HTTPException
 from dotenv import load_dotenv
@@ -467,128 +471,121 @@ def get_kendi_risk_skorumuz(domain: str) -> dict:
 
 def generate_fallback_summary(domain_name: str, vt_data: dict, abuse_data: dict, kendi_model_skoru: dict) -> str:
     """
-    Gemini hata verdiğinde otomatik olarak kullanılacak yedek rapor.
-    ML + XAI sonuçlarını yapılandırılmış formatta sunar.
+    Generates an enterprise-grade security report.
+    Format: Slack Mrkdwn optimized.
     """
     
-    # Risk skorunu çıkar
-    risk_score = kendi_model_skoru.get("risk_skoru_yuzde", "N/A")
+    report_id = f"REP-{uuid.uuid4().hex[:8].upper()}"
+    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+
+    # --- 1. Risk Matrix ---
+    risk_score = kendi_model_skoru.get("risk_skoru_yuzde", "0")
     try:
         risk_num = float(risk_score.replace("%", ""))
-        if risk_num >= 80:
-            risk_level = "KRİTİK"
-            action = "ENGELLEME"
-        elif risk_num >= 50:
-            risk_level = "YÜKSEK"
-            action = "İZLEME"
-        elif risk_num >= 20:
-            risk_level = "ORTA"
-            action = "İZLEME"
+        if risk_num >= 85:
+            verdict = "MALICIOUS"
+            severity = "CRITICAL"
+            action = "BLOCK & ISOLATE"
+            icon = "🔴"
+        elif risk_num >= 60:
+            verdict = "SUSPICIOUS"
+            severity = "HIGH"
+            action = "BLOCK / INSPECT"
+            icon = "🟠"
+        elif risk_num >= 30:
+            verdict = "UNUSUAL"
+            severity = "MEDIUM"
+            action = "MONITOR TRAFFIC"
+            icon = "🟡"
         else:
-            risk_level = "DÜŞÜK"
-            action = "GÜVENLİ"
+            verdict = "BENIGN"
+            severity = "LOW"
+            action = "ALLOW"
+            icon = "🟢"
     except:
-        risk_level = "BİLİNMİYOR"
-        action = "MANUEL İNCELEME"
-    
-    # VirusTotal sonuçları
-    vt_status = "N/A"
+        verdict = "UNKNOWN"
+        severity = "INFO"
+        action = "MANUAL REVIEW"
+        icon = "⚪"
+
+    # --- 2. Threat Intel ---
     if "hata" not in vt_data:
         vt_malicious = vt_data.get("malicious", 0)
         vt_total = sum(vt_data.values())
-        vt_status = f"{vt_malicious}/{vt_total}"
-    
-    # AbuseIPDB sonuçları
-    abuse_status = "N/A"
+        vt_text = f"{vt_malicious}/{vt_total} Engines" if vt_malicious > 0 else "Clean"
+    else:
+        vt_text = "N/A"
+
     if "hata" not in abuse_data:
         abuse_score = abuse_data.get("abuseConfidenceScore", 0)
-        abuse_status = f"{abuse_score}%"
-    
-    # XAI Analizi
-    xai_summary = "XAI verileri mevcut değil."
+        abuse_text = f"{abuse_score}% Confidence"
+    else:
+        abuse_text = "N/A"
+
+    # --- 3. XAI Analysis ---
+    xai_output = ""
     xai_data = kendi_model_skoru.get("xai_aciklama", {})
     
     if xai_data and "hata" not in xai_data:
         top_features = xai_data.get("top_features", [])
         
-        if top_features and len(top_features) > 0:
-            # Pozitif (risk artıran) ve negatif (risk azaltan) features'ları ayır
-            positive_features = [f for f in top_features if f.get('impact') == 'positive']
-            negative_features = [f for f in top_features if f.get('impact') == 'negative']
-            
-            xai_summary = "Modelin karar gerekçesi (SHAP analizi):\n\n"
-            
-            # Pozitif features (risk artıran)
-            if positive_features:
-                xai_summary += "📈 Risk Skorunu ARTIRAN Özellikler:\n"
-                for i, feat in enumerate(positive_features[:3], 1):
-                    feat_name = feat.get('feature', 'N/A')
-                    shap_val = feat.get('shap_value', 0)
-                    xai_summary += f"  {i}. {feat_name} (SHAP: +{shap_val:.4f})\n"
-                xai_summary += "\n"
-            
-            # Negatif features (risk azaltan)
-            if negative_features:
-                xai_summary += "📉 Risk Skorunu AZALTAN Özellikler:\n"
-                for i, feat in enumerate(negative_features[:3], 1):
-                    feat_name = feat.get('feature', 'N/A')
-                    shap_val = feat.get('shap_value', 0)
-                    xai_summary += f"  {i}. {feat_name} (SHAP: {shap_val:.4f})\n"
-            
-            if not positive_features and not negative_features:
-                xai_summary = "XAI verileri mevcut ama feature'lar ayrıştırılamadı."
-        else:
-            xai_summary = "XAI verileri mevcut ama top features bulunamadı."
+        risk_factors = [f for f in top_features if f.get('impact') == 'positive']
+        trust_factors = [f for f in top_features if f.get('impact') == 'negative']
+
+        if risk_factors:
+            xai_output += "*Risk Indicators:*\n"
+            for feat in risk_factors[:3]:
+                feat_name = feat['feature'].replace('TLD_Grouped_', '.').replace('DNSRecordType_', 'DNS: ')
+                xai_output += f"• {feat_name} `+{feat['shap_value']:.2f}`\n"
+        
+        if trust_factors:
+            if risk_factors: xai_output += "\n"
+            xai_output += "*Safety Indicators:*\n"
+            for feat in trust_factors[:2]:
+                feat_name = feat['feature'].replace('DNSRecordType_', 'DNS: ').replace('TLD_Grouped_', '.')
+                xai_output += f"• {feat_name} `-{abs(feat['shap_value']):.2f}`\n"
     else:
-        error_msg = xai_data.get("hata", "Bilinmeyen hata") if xai_data else "Veri yok"
-        xai_summary = f"XAI verileri oluşturulamadı: {error_msg}"
-    
-    # Yedek rapor oluştur
-    fallback_report = f"""
-⚠️ [LLM GEÇİCİ OLARAK KULLANILAMADI - OTOMATIK RAPOR]
+        xai_output = "_No significant anomalies detected._"
 
-=== TI / ML KARAR ÖZETİ ===
-
-Domain: {domain_name}
-
-Harici Kaynaklar:
-• VirusTotal: {vt_status} zararlı tespit
-• AbuseIPDB: Güven Skoru {abuse_status}
-
-Kendi ML Modelimiz (LightGBM %99.75):
-• Risk Skoru: {risk_score}
-• Risk Seviyesi: {risk_level}
-• Tespit Edilen IP: {kendi_model_skoru.get('tespit_edilen_ip', 'N/A')}
-• Ülke: {kendi_model_skoru.get('tespit_edilen_ulke', 'N/A')}
-
-=== XAI ANALİZİ ===
-
-{xai_summary}
-
-=== RİSK SINIFLANDIRMASI ===
-
-{risk_level}
-
-=== EYLEM ÖNERİSİ ===
-
-{action}
-
----
-ℹ️ Bu rapor, LLM servisi kullanılamadığında otomatik olarak üretilmiştir.
-   Tüm teknik veriler (TI, ML, XAI) yukarıda sunulmuştur.
-"""
-    
-    return fallback_report
+    # --- JSON Return (String değil Sözlük döndürüyoruz ki Slack Bot parçalayabilsin) ---
+    # Not: Bu fonksiyon artık bir "Sözlük" (Dictionary) yapısı hazırlıyor.
+    return {
+        "report_id": report_id,
+        "timestamp": timestamp,
+        "verdict": verdict,
+        "severity": severity,
+        "icon": icon,
+        "risk_score": risk_score,
+        "action": action,
+        "vt_text": vt_text,
+        "abuse_text": abuse_text,
+        "xai_output": xai_output
+    }
 
 
 # Şimdi enrich_and_summarize_domain fonksiyonunu güncelleyin:
-
+@app.get("/")
+def read_root():
+    return {"status": "online", "message": "ChatSecOps API Çalışıyor 🚀"}
 @app.get("/enrich-and-summarize/domain/{domain_name}")
 def enrich_and_summarize_domain(domain_name: str):
     logger.info(f"YENİ İSTEK ALINDI: Domain = {domain_name}")
     start_time = time.time()
 
-    # TI ve ML verilerini topla
+    # === 1. MEMORY SYSTEM: Hafızadan içgörüler al ===
+    memory_insights = memory_engine.get_domain_insights(domain_name)
+    campaign_detection = memory_engine.get_campaign_detection(domain_name)
+    
+    if memory_insights.get("is_known"):
+        logger.info(f"⚠️ {domain_name} daha önce {memory_insights['analysis_count']} kez görüldü!")
+    
+    # === 2. OSINT: Public threat feeds kontrolü ===
+    osint_data = intel_engine.get_osint_data(domain_name)
+    
+    if osint_data.get("threats_detected"):
+        logger.warning(f"🚨 {domain_name} threat feed'lerde tespit edildi!")
+
+    # === 3. MEVCUT ANALİZ (TI + ML) ===
     vt_data = get_virustotal_data(domain_name)
     kendi_model_skoru = get_kendi_risk_skorumuz(domain_name)
 
@@ -598,11 +595,11 @@ def enrich_and_summarize_domain(domain_name: str):
     else:
         abuse_data = {"hata": "Domain'e ait IP bulunamadığı için sorgulanamadı."}
 
-    # Gemini prompt (aynı kalıyor)
+    # === 4. GEMINI PROMPT'U ZENGİNLEŞTİR ===
     prompt_template = f"""
 Sen, bir siber güvenlik operasyon merkezinde (SOC) görevli **Kıdemli Tehdit İstihbaratı (TI) Analistisin**.
 
-Görevin, {domain_name} alan adı hakkında toplanan tüm bilgileri (Harici API'lar, Kendi ML Modelimiz ve XAI Verisi) füzyon yaparak analiz etmek ve eyleme geçirilebilir bir rapor hazırlamaktır.
+Görevin, {domain_name} alan adı hakkında toplanan tüm bilgileri (Harici API'lar, Kendi ML Modelimiz, XAI Verisi, OSINT ve Hafıza Sistemi) füzyon yaparak analiz etmek ve eyleme geçirilebilir bir rapor hazırlamaktır.
 
 --- GİRİŞ VERİLERİ (JSON FORMATINDA) ---
 
@@ -610,36 +607,49 @@ Harici API Verileri:
 1. VirusTotal (Domain): {vt_data}
 2. AbuseIPDB (IP): {abuse_data}
 
-Kendi ML Modelimiz (LightGBM %99.75):
+Kendi ML Modelimiz (LightGBM):
 {kendi_model_skoru}
+
+OSINT Intelligence:
+{osint_data}
+
+Hafıza Sistemi İçgörüleri:
+{memory_insights}
+
+{"⚠️ CAMPAIGN ALERT: " + json.dumps(campaign_detection) if campaign_detection else ""}
 
 --- ANALİZ GEREKSİNİMLERİ ---
 
-Sadece tek bir analiz raporu çıktısı vermelisin. Bu rapor, aşağıdaki 4 temel bölümü içermelidir:
+Sadece tek bir analiz raporu çıktısı vermelisin. Bu rapor, aşağıdaki bölümleri içermelidir:
 
-1.  **TI / ML Karar Özeti:**
-    * VirusTotal, AbuseIPDB ve Kendi ML Modelimizin ({kendi_model_skoru.get('risk_skoru_yuzde', 'N/A')}) sonuçlarını tek bir paragrafta birleştir.
-    * **Ana Odak:** Karar verme sürecindeki belirsizlikleri (Örn: AbuseIPDB'de skor 0 iken ML'in yüksek skor vermesi gibi) netleştir.
+1. **TI / ML Karar Özeti:**
+   * Tüm kaynakları (VT, AbuseIPDB, ML, OSINT, Memory) füzyon yap
+   * OSINT'te threat bulunduysa ÖNCE bunu vurgula
+   * Hafıza sisteminde benzer domain varsa typosquatting uyarısı ver
 
-2.  **Modelin Karar Gerekçesi (XAI Analizi):**
-    * 'xai_aciklama' altındaki verileri kullanarak, ML modelinin neden bu risk skoruna ulaştığını açıkla.
-    * **Zararlıya İten (Pozitif) Özellikler:** Modelin risk skorunu en çok artıran ilk 3 özellik (Örn: TLD_Grouped_xyz, ASN, Entropy) ve bu özelliklerin değerleri nelerdir?
-    * **Güvenliye İten (Negatif) Özellikler:** Modelin zararsız olduğuna en çok ikna eden (skoru düşüren) ilk 3 özellik nelerdir?
+2. **Modelin Karar Gerekçesi (XAI Analizi):**
+   * 'xai_aciklama' altındaki verileri kullanarak açıkla
+   * Risk skorunu artıran ve azaltan özellikleri listele
 
-3.  **Risk Sınıflandırması:**
-    * Tüm verileri dikkate alarak net bir **Risk Seviyesi** belirle. (Sadece şu terimlerden birini kullan: DÜŞÜK, ORTA, YÜKSEK, KRİTİK).
+3. **Risk Sınıflandırması:**
+   * DÜŞÜK, ORTA, YÜKSEK, KRİTİK (sadece birini seç)
+   * Eğer OSINT'te threat bulunduysa, risk seviyesi otomatik KRİTİK olmalı
 
-4.  **Eylem Önerisi (SOAR Kararı):**
-    * SOC operatörünün hemen uygulayabileceği net bir aksiyon sun. (Sadece şu terimlerden birini kullan: ENGELLEME, İZLEME, GÜVENLİ).
+4. **Eylem Önerisi (SOAR Kararı):**
+   * ENGELLEME, İZLEME, GÜVENLİ
+   * Campaign tespit edildiyse, diğer domain'leri de kontrol et önerisi ekle
 
 --- RAPOR FORMATI ---
 
-Cevabını doğrudan rapor içeriğiyle başlat. Başlık ve alt başlıklar kullanma. Tüm bilgiyi, analizin mantıksal akışını takip eden tek bir metin bloğu olarak sun.
+Cevabını doğrudan rapor içeriğiyle başlat. Başlık kullanma.
 """
+    
+    # Threat hunting logic ekle
     prompt_template += intel_engine.get_hunting_logic()
+    
     print(f"      [>] Gemini AI sorgulanıyor...")
 
-    # Gemini çağrısı - HATA YÖNETİMİ İLE
+    # === 5. GEMINI ÇAĞRISI ===
     ai_summary = None
     gemini_error = None
     
@@ -656,28 +666,58 @@ Cevabını doğrudan rapor içeriğiyle başlat. Başlık ve alt başlıklar kul
         print(f"      [⚠️] Gemini AI hatası: {e}")
         print(f"      [>] Yedek rapor oluşturuluyor...")
         
-        # YEDEK RAPOR OLUŞTUR
         ai_summary = generate_fallback_summary(domain_name, vt_data, abuse_data, kendi_model_skoru)
         print(f"      [✅] Yedek rapor başarıyla oluşturuldu.")
 
-    # Yanıtı döndür
+    # === 6. YANITI OLUŞTUR ===
     response_data = {
         "domain": domain_name,
         "ai_ozeti": ai_summary,
         "ham_veriler": {
             "virustotal": vt_data,
             "abuseipdb": abuse_data,
-            "kendi_modelimiz": kendi_model_skoru
-        }
+            "kendi_modelimiz": kendi_model_skoru,
+            "osint": osint_data  # YENİ
+        },
+        "memory_insights": memory_insights,  # YENİ
+        "campaign_alert": campaign_detection,  # YENİ
     }
     
-    # Eğer Gemini hata verdiyse bunu belirt
     if gemini_error:
         response_data["llm_status"] = "fallback"
         response_data["llm_error"] = gemini_error
     else:
         response_data["llm_status"] = "success"
     
+    # === 7. HAFIZAYA KAYDET ===
+    memory_result = memory_engine.store_analysis(domain_name, response_data)
+    response_data["similar_domains"] = memory_result.get("similar_domains", [])
+    
     execution_time = round(time.time() - start_time, 2)
     logger.info(f"Analiz tamamlandı ({domain_name}): {execution_time} sn.")
+    
     return response_data
+
+
+"""
+YENİ ENDPOINT: İstatistikler
+"""
+
+@app.get("/statistics")
+def get_statistics():
+    """Sistem istatistiklerini döndür"""
+    stats = memory_engine.get_statistics()
+    return {
+        "status": "success",
+        "data": stats
+    }
+
+
+@app.post("/feedback")
+def submit_feedback(domain: str, feedback: str, is_false_positive: bool = False):
+    """Analyst feedback kaydet"""
+    memory_engine.add_analyst_feedback(domain, feedback, is_false_positive)
+    return {
+        "status": "success",
+        "message": f"Feedback kaydedildi: {domain}"
+    }

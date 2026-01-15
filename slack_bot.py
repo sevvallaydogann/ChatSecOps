@@ -1,11 +1,10 @@
 """
-ChatSecOps Slack Bot
-Ayrı bir dosya olarak çalışır, main.py'den bağımsızdır.
-Backend API (main.py) ile REST üzerinden haberleşir.
-
-Çalıştırma:
-    Terminal 1: uvicorn main:app --reload
-    Terminal 2: python slack_bot.py
+ChatSecOps Slack Bot (Enterprise Edition v2.1)
+Features:
+- Professional Incident Reporting (Grid Layout)
+- Real-time Visual Evidence (Thum.io)
+- Interactive Action Buttons (PDF, Graph, Block)
+- Full English Localization
 """
 
 import os
@@ -14,229 +13,191 @@ import re
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
-from ChatSecOps_Intelligence import intel_engine
 
-# Ortam değişkenlerini yükle
+# Import helper modules
+# Ensure ChatSecOps_Memory and ChatSecOps_Intelligence are in the same folder
+from ChatSecOps_Memory import format_memory_insights, format_similar_domains
+from ChatSecOps_Intelligence import format_osint_results, intel_engine
+
+# Load Environment Variables
 load_dotenv()
 
-# Slack App'i başlat
+# Initialize Slack App
 app = App(token=os.getenv("SLACK_BOT_TOKEN"))
 
-# Backend API URL'i (main.py FastAPI sunucusu)
+# Backend API URL (FastAPI Server)
 BACKEND_API = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 
-# --- YARDIMCI FONKSİYONLAR ---
+# --- 1. REPORT FORMATTING (Grid Layout + Buttons) ---
 
 def format_risk_message(data: dict) -> dict:
-    """API yanıtını Slack mesaj formatına dönüştür"""
-    domain = data.get("domain", "Bilinmiyor")
-    ai_summary = data.get("ai_ozeti", "Analiz tamamlanamadı.")
+    """Formats the API response into a Modern Enterprise Grid Layout with Buttons"""
+    domain = data.get("domain", "Unknown Asset")
+    
+    # Retrieve file paths for buttons (Passed from Backend)
+    pdf_path = data.get("pdf_report", "")
+    shap_path = data.get("shap_graph", "")
+
+    # Handle AI Summary (Convert to dict if string)
+    ai_summary_raw = data.get("ai_ozeti", {})
+    if isinstance(ai_summary_raw, str):
+        # Fallback if backend returns plain string
+        report_data = {"xai_output": ai_summary_raw, "verdict": "ANALYZED"}
+    else:
+        report_data = ai_summary_raw
+
+    # Extract Report Data
+    report_id = report_data.get("report_id", "N/A")
+    timestamp = report_data.get("timestamp", "N/A")
+    verdict = report_data.get("verdict", "UNKNOWN")
+    severity = report_data.get("severity", "INFO")
+    icon = report_data.get("icon", "🛡️")
+    risk_score = report_data.get("risk_score", "0%")
+    action = report_data.get("action", "REVIEW")
+    vt_text = report_data.get("vt_text", "N/A")
+    abuse_text = report_data.get("abuse_text", "N/A")
+    xai_output = report_data.get("xai_output", "No details available.")
+
+    # Extract Model Data
     raw_data = data.get("ham_veriler", {})
-    
-    # LLM durumunu kontrol et
-    llm_status = data.get("llm_status", "success")
-    is_fallback = (llm_status == "fallback")
-    
-    # Kendi modelimizin sonuçları
     model_data = raw_data.get("kendi_modelimiz", {})
-    risk_score = model_data.get("risk_skoru_yuzde", "N/A")
     detected_ip = model_data.get("tespit_edilen_ip", "N/A")
     country = model_data.get("tespit_edilen_ulke", "N/A")
-    
-    # Risk seviyesine göre emoji ve renk
-    try:
-        risk_num = float(risk_score.replace("%", ""))
-        if risk_num >= 80:
-            emoji = "🔴"
-            color = "#d73a49"
-            level = "KRİTİK"
-        elif risk_num >= 50:
-            emoji = "🟠"
-            color = "#fb8500"
-            level = "YÜKSEK"
-        elif risk_num >= 20:
-            emoji = "🟡"
-            color = "#ffb700"
-            level = "ORTA"
-        else:
-            emoji = "🟢"
-            color = "#28a745"
-            level = "DÜŞÜK"
-    except:
-        emoji = "⚪"
-        color = "#586069"
-        level = "BİLİNMİYOR"
-    
-    # VirusTotal sonucu
-    vt_data = raw_data.get("virustotal", {})
-    if "hata" not in vt_data:
-        vt_malicious = vt_data.get("malicious", 0)
-        vt_total = sum(vt_data.values())
-        vt_status = f"{vt_malicious}/{vt_total} tespit"
-    else:
-        vt_status = "Sorgu başarısız"
-    
-    # AbuseIPDB sonucu
-    abuse_data = raw_data.get("abuseipdb", {})
-    if "hata" not in abuse_data:
-        abuse_score = abuse_data.get("abuseConfidenceScore", 0)
-        abuse_reports = abuse_data.get("totalReports", 0)
-        abuse_status = f"Güven Skoru: {abuse_score}% | Raporlar: {abuse_reports}"
-    else:
-        abuse_status = "Sorgu başarısız"
-    
-    # Slack mesaj bloklarını oluştur
-    blocks = [
-        {
-            "type": "header",
-            "text": {
-                "type": "plain_text",
-                "text": f"{emoji} Tehdit Analiz Raporu: {domain}",
-                "emoji": True
-            }
-        }
-    ]
-    screenshot_url = intel_engine.get_visual_evidence(domain)
 
-    # BLOKLARI DAHA GÜVENLİ EKLEYELİM
-    # Slack bazen resmi indiremezse hata verir, bu yüzden image bloğunu ayrı ekliyoruz
+    blocks = []
+
+    # --- A. Header ---
+    blocks.append({
+        "type": "header",
+        "text": {
+            "type": "plain_text",
+            "text": f"{icon} Incident Report: {domain}",
+            "emoji": True
+        }
+    })
+
+    # --- B. Context (ID & Time) ---
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {"type": "mrkdwn", "text": f"*Case ID:* `{report_id}`"},
+            {"type": "mrkdwn", "text": f"*Timestamp:* {timestamp}"}
+        ]
+    })
+    blocks.append({"type": "divider"})
+
+    # --- C. Visual Evidence (Thum.io) ---
+    try:
+        screenshot_url = intel_engine.get_visual_evidence(domain)
+        blocks.append({
+            "type": "image",
+            "title": {"type": "plain_text", "text": "🌐 Live Site Preview", "emoji": True},
+            "image_url": screenshot_url,
+            "alt_text": "visual_proof"
+        })
+    except:
+        pass
+
+    # --- D. Executive Summary (Grid) ---
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "*🛡️ Executive Summary*"},
+        "fields": [
+            {"type": "mrkdwn", "text": f"*Verdict:*\n`{verdict}`"},
+            {"type": "mrkdwn", "text": f"*Severity:*\n{icon} {severity}"},
+            {"type": "mrkdwn", "text": f"*Risk Score:*\n{risk_score}"},
+            {"type": "mrkdwn", "text": f"*Action:*\n`{action}`"}
+        ]
+    })
+    blocks.append({"type": "divider"})
+
+    # --- E. Technical Intelligence (Grid) ---
+    blocks.append({
+        "type": "section",
+        "text": {"type": "mrkdwn", "text": "*🔬 Technical Intelligence*"},
+        "fields": [
+            {"type": "mrkdwn", "text": f"*VirusTotal:*\n{vt_text}"},
+            {"type": "mrkdwn", "text": f"*AbuseIPDB:*\n{abuse_text}"},
+            {"type": "mrkdwn", "text": f"*Hosting IP:*\n`{detected_ip}`"},
+            {"type": "mrkdwn", "text": f"*Location:*\n{country}"}
+        ]
+    })
+
+    # --- F. AI Reasoning ---
     blocks.append({
         "type": "section",
         "text": {
             "type": "mrkdwn",
-            "text": f"🌐 *Görsel Kanıt (Web Preview):* <{screenshot_url}|Görüntüyü Tarayıcıda Aç>"
+            "text": f"*🤖 AI Reasoning (Behavioral Analysis)*\n{xai_output}"
         }
     })
+    blocks.append({"type": "divider"})
 
-    # İsteğe bağlı: Hala resim olarak denemek istersen ama hata riskini azaltmak için:
-    blocks.append({
-        "type": "image",
-        "image_url": screenshot_url,
-        "alt_text": "Site Preview"
-    })
+    # --- G. INTERACTIVE ACTION BUTTONS (New Feature) ---
+    action_elements = []
     
-    # Eğer fallback modundaysa uyarı ekle
-    if is_fallback:
-        blocks.append({
-            "type": "context",
-            "elements": [
-                {
-                    "type": "mrkdwn",
-                    "text": "⚠️ *LLM geçici olarak kullanılamıyor. Otomatik rapor oluşturuldu.*"
-                }
-            ]
+    # PDF Download Button
+    if pdf_path:
+        action_elements.append({
+            "type": "button",
+            "text": {"type": "plain_text", "text": "📄 Download Report (PDF)", "emoji": True},
+            "style": "primary",
+            "value": pdf_path, # Path stored in button value
+            "action_id": "download_pdf"
         })
     
-    blocks.extend([
-        {
-            "type": "section",
-            "fields": [
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Risk Seviyesi:*\n{level}"
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*ML Risk Skoru:*\n{risk_score}"
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Tespit Edilen IP:*\n`{detected_ip}`"
-                },
-                {
-                    "type": "mrkdwn",
-                    "text": f"*Ülke:*\n{country}"
-                }
-            ]
-        },
-        {"type": "divider"},
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*📊 Harici Kaynak Verileri*\n\n*VirusTotal:* {vt_status}\n*AbuseIPDB:* {abuse_status}"
-            }
-        },
-        {"type": "divider"},
-        {
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*🤖 AI Analiz Özeti*\n\n{ai_summary}"
-            }
-        }
-    ])
+    # SHAP Graph Button
+    if shap_path:
+        action_elements.append({
+            "type": "button",
+            "text": {"type": "plain_text", "text": "📊 View SHAP Graph", "emoji": True},
+            "value": shap_path,
+            "action_id": "show_graph"
+        })
+
+    # Block Button (Simulation)
+    action_elements.append({
+        "type": "button",
+        "text": {"type": "plain_text", "text": "⛔ Block Asset (Firewall)", "emoji": True},
+        "style": "danger",
+        "action_id": "block_action"
+    })
+
+    # Add buttons to blocks
+    if action_elements:
+        blocks.append({
+            "type": "actions",
+            "elements": action_elements
+        })
     
     return {
         "blocks": blocks,
-        "text": f"Analiz Raporu: {domain} - Risk: {level}"
+        "text": f"Incident Report: {domain} - {verdict}"
     }
 
-# --- SLACK KOMUTLARI ---
-
-@app.message("help")
-@app.message("yardım")
-def help_command(message, say):
-    """Yardım mesajı"""
-    help_text = """
-🛡️ *ChatSecOps Mini-SOAR Komutları*
-
-📝 *Kullanım:*
-• `analyze <domain>` - Domain analizi yap
-• `check <domain>` - Domain kontrolü
-• `scan <domain>` - Domain taraması
-
-💡 *Örnekler:*
-• `analyze inetserv.pl`
-• `check malicious-domain.com`
-• `scan example.org`
-
-❓ *Yardım:*
-• `help` veya `yardım` - Bu mesajı göster
-• `status` - Sistem durumu
-
----
-_ChatSecOps v1.0 | Powered by LightGBM + Gemini AI_
-    """
-    say(help_text)
-
-@app.message("status")
-@app.message("durum")
-def status_command(message, say):
-    """Sistem durumu kontrolü"""
-    try:
-        response = requests.get(f"{BACKEND_API}/", timeout=5)
-        if response.status_code == 200:
-            say("✅ *Sistem Durumu:* Çevrimiçi ve Çalışıyor\n🔗 Backend API bağlantısı başarılı.")
-        else:
-            say("⚠️ *Sistem Durumu:* Backend API yanıt vermiyor.")
-    except Exception as e:
-        say(f"❌ *Sistem Durumu:* Bağlantı hatası\n```{str(e)}```")
+# --- 2. COMMAND HANDLERS ---
 
 @app.message("analyze")
 @app.message("check")
 @app.message("scan")
 def analyze_domain(message, say):
-    """Domain analizi yap"""
+    """Main Analysis Command"""
     text = message.get("text", "")
     words = text.split()
     
     if len(words) < 2:
-        say("❌ *Hata:* Lütfen bir domain belirtin.")
+        say("❌ *Error:* Please specify a domain.\nExample: `analyze google.com`")
         return
     
-    # --- [YENİ: SLACK LİNK TEMİZLEME KODU] ---
+    # Clean up Slack formatting (e.g., <http://google.com|google.com>)
     raw_domain = words[1].strip()
-    # Slack linklerini temizle: <http://google.com|google.com> -> google.com
     domain = re.sub(r"<http[s]?://[^|]+\|([^>]+)>", r"\1", raw_domain)
-    # Eğer link değil de düz metinse ama < > içindeyse yine temizle
     domain = domain.replace("<", "").replace(">", "").replace("http://", "").replace("https://", "")
-    # ----------------------------------------
 
-    say(f"🔍 *{domain}* analiz ediliyor, lütfen bekleyin...")
+    say(f"🔍 *{domain}* is being analyzed by SOAR Engine... Please wait.")
     
     try:
-        # Backend API'ye istek gönder
+        # Request analysis from Backend
         response = requests.get(
             f"{BACKEND_API}/enrich-and-summarize/domain/{domain}",
             timeout=60
@@ -244,39 +205,178 @@ def analyze_domain(message, say):
         
         if response.status_code == 200:
             data = response.json()
+            
+            # 1. Main Report with Buttons
             message_blocks = format_risk_message(data)
             say(**message_blocks)
+            
+            # 2. Memory Insights
+            memory_insights = data.get("memory_insights", {})
+            if memory_insights.get("is_known"):
+                say(format_memory_insights(memory_insights))
+            
+            # 3. Similar Domains
+            similar = data.get("similar_domains", [])
+            if similar:
+                say(format_similar_domains(similar))
+            
+            # 4. Campaign Alert
+            campaign = data.get("campaign_alert")
+            if campaign:
+                say(f"🚨 *CAMPAIGN ALERT*\n\n{campaign.get('recommendation', '')}")
+            
+            # 5. OSINT Results
+            osint_data = data.get("ham_veriler", {}).get("osint", {})
+            if osint_data.get("threats_detected"):
+                say(format_osint_results(osint_data))
+        
         else:
-            say(f"❌ *Analiz Hatası*\n```Status Code: {response.status_code}\n{response.text}```")
+            say(f"❌ *Analysis Failed*\n```Status Code: {response.status_code}```")
     
     except requests.exceptions.Timeout:
-        say(f"⏱️ *Zaman Aşımı*\nAnaliz süresi çok uzun sürdü. Domain: `{domain}`")
+        say(f"⏱️ *Timeout:* Analysis took too long.")
     except Exception as e:
-        say(f"❌ *Beklenmeyen Hata*\n```{str(e)}```")
+        say(f"❌ *Unexpected Error:*\n```{str(e)}```")
 
-# Bot'a mention edildiğinde
+@app.message("status")
+@app.message("durum")
+def status_command(message, say):
+    """Check System Health"""
+    try:
+        response = requests.get(f"{BACKEND_API}/", timeout=5)
+        if response.status_code == 200:
+            say("✅ *System Status:* Online & Operational\n🔗 Backend API connection established.")
+        else:
+            say("⚠️ *System Status:* Backend API is unreachable.")
+    except Exception as e:
+        say(f"❌ *System Error:* Connection failed\n```{str(e)}```")
+
+@app.message("stats")
+@app.message("statistics")
+def statistics_command(message, say):
+    """Show System Statistics"""
+    try:
+        response = requests.get(f"{BACKEND_API}/statistics", timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json().get("data", {})
+            
+            stats_message = f"""
+📊 *ChatSecOps System Statistics*
+
+*General Overview:*
+• Total Analysis: {data.get('total_analyses', 0):,}
+• Malicious Detections: {data.get('malicious_count', 0):,} ({data.get('malicious_rate', 0)}%)
+• Last 24h: {data.get('last_24h_analyses', 0):,} scans
+
+*Top Detected TLDs:*
+"""
+            for tld in data.get('top_tlds', [])[:5]:
+                stats_message += f"• .{tld['tld']}: {tld['count']} domains\n"
+            
+            stats_message += "\n*High-Risk IPs:*\n"
+            for ip in data.get('high_risk_ips', [])[:3]:
+                stats_message += f"• `{ip['ip']}`: {ip['domain_count']} domains\n"
+            
+            say(stats_message)
+        else:
+            say("❌ Statistics unavailable.")
+    except Exception as e:
+        say(f"❌ Error: {str(e)}")
+
+@app.message("help")
+def help_command(message, say):
+    """Help Menu"""
+    help_text = """
+🛡️ *ChatSecOps SOAR - Command Menu*
+
+*📝 Core Analysis:*
+• `analyze <domain>` - Full Analysis (ML + TI + PDF Report)
+• `check <domain>` - Quick Check
+• `scan <domain>` - Deep Scan
+
+*🔍 Advanced:*
+• `similar <domain>` - Find Typosquatting (Similar Domains)
+• `stats` - System Statistics & Threat Landscape
+• `campaign` - Check for Active Campaigns
+• `feedback <domain> <comment>` - Submit Analyst Feedback
+
+*❓ Misc:*
+• `help` - Show this menu
+• `status` - Check System Health
+
+*💡 Example:*
+`analyze google.com`
+    """
+    say(help_text)
+
+# --- 3. ACTION HANDLERS (Buttons) ---
+
+@app.action("download_pdf")
+def handle_pdf_download(ack, body, client):
+    """Handles PDF Download Button Click"""
+    ack()
+    
+    filepath = body['actions'][0]['value']
+    channel_id = body['channel']['id']
+    
+    try:
+        if os.path.exists(filepath):
+            # Upload the file to Slack
+            client.files_upload_v2(
+                channel=channel_id,
+                file=filepath,
+                title="Incident Report (PDF)",
+                initial_comment="📄 *Forensic Report Generated successfully.*"
+            )
+        else:
+            client.chat_postMessage(channel=channel_id, text="⚠️ PDF file not found on server.")
+    except Exception as e:
+        client.chat_postMessage(channel=channel_id, text=f"❌ Upload Error: {str(e)}")
+
+@app.action("show_graph")
+def handle_graph_show(ack, body, client):
+    """Handles SHAP Graph Button Click"""
+    ack()
+    
+    filepath = body['actions'][0]['value']
+    channel_id = body['channel']['id']
+    
+    try:
+        if os.path.exists(filepath):
+            client.files_upload_v2(
+                channel=channel_id,
+                file=filepath,
+                title="XAI Analysis Graph",
+                initial_comment="📊 *Explainable AI (SHAP) Analysis Graph*"
+            )
+        else:
+            client.chat_postMessage(channel=channel_id, text="⚠️ Graph file not found.")
+    except Exception as e:
+        client.chat_postMessage(channel=channel_id, text=f"❌ Upload Error: {str(e)}")
+
+@app.action("block_action")
+def handle_block(ack, body, client):
+    """Handles Block Button Click"""
+    ack()
+    user = body['user']['id']
+    client.chat_postMessage(
+        channel=body['channel']['id'], 
+        text=f"🛡️ *Firewall Rule Initiated!* Asset blocked by <@{user}>.\n_Ticket created in ITSM._"
+    )
+
 @app.event("app_mention")
 def handle_mention(event, say):
-    """Bot'a mention edildiğinde otomatik cevap"""
     text = event.get("text", "").lower()
-    
-    if "help" in text or "yardım" in text:
+    if "help" in text:
         help_command(event, say)
-    elif "status" in text or "durum" in text:
-        status_command(event, say)
     else:
-        say(f"👋 Merhaba! Domain analizi için `analyze <domain>` komutunu kullanın.\nYardım için: `help`")
+        say(f"👋 Hello! Use `analyze <domain>` to start a security scan.")
 
-# --- ANA PROGRAM ---
+# --- MAIN ---
 
 if __name__ == "__main__":
-    print("🚀 ChatSecOps Slack Bot başlatılıyor...")
-    print(f"🔗 Backend API: {BACKEND_API}")
+    print("🚀 ChatSecOps Slack Bot (Enterprise v2.1) is starting...")
+    print(f"🔗 Connected to Backend: {BACKEND_API}")
     
-    # Socket Mode ile başlat (firewall arkasında çalışır)
-    handler = SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN"))
-    
-    print("✅ Bot hazır! Slack workspace'inizde komutları kullanabilirsiniz.")
-    print("📝 Komutlar: analyze, check, scan, help, status")
-    
-    handler.start()
+    SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN")).start()
