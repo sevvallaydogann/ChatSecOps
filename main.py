@@ -10,6 +10,8 @@ import socket
 import re
 from ChatSecOps_Intelligence import intel_engine
 from math import log2
+from fastapi.responses import FileResponse
+from ChatSecOps_Analytics import create_pdf_report # Yeni modülümüz
 from ChatSecOps_Memory import memory_engine, format_memory_insights, format_similar_domains
 from ChatSecOps_Intelligence import intel_engine, enrich_with_osint, format_osint_results, intel_engine
 from collections import Counter
@@ -469,44 +471,30 @@ def get_kendi_risk_skorumuz(domain: str) -> dict:
         import traceback; traceback.print_exc()
         return {"hata": str(e)}
 
-def generate_fallback_summary(domain_name: str, vt_data: dict, abuse_data: dict, kendi_model_skoru: dict) -> str:
+def generate_fallback_summary(domain_name: str, vt_data: dict, abuse_data: dict, kendi_model_skoru: dict) -> dict:
     """
     Generates an enterprise-grade security report.
-    Format: Slack Mrkdwn optimized.
+    Logic Update: Handles High Risk / Empty XAI cases.
     """
     
     report_id = f"REP-{uuid.uuid4().hex[:8].upper()}"
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
     # --- 1. Risk Matrix ---
-    risk_score = kendi_model_skoru.get("risk_skoru_yuzde", "0")
+    risk_score_str = kendi_model_skoru.get("risk_skoru_yuzde", "0")
     try:
-        risk_num = float(risk_score.replace("%", ""))
+        risk_num = float(str(risk_score_str).replace("%", ""))
         if risk_num >= 85:
-            verdict = "MALICIOUS"
-            severity = "CRITICAL"
-            action = "BLOCK & ISOLATE"
-            icon = "🔴"
+            verdict, severity, action, icon = "MALICIOUS", "CRITICAL", "BLOCK & ISOLATE", "🔴"
         elif risk_num >= 60:
-            verdict = "SUSPICIOUS"
-            severity = "HIGH"
-            action = "BLOCK / INSPECT"
-            icon = "🟠"
+            verdict, severity, action, icon = "SUSPICIOUS", "HIGH", "BLOCK / INSPECT", "🟠"
         elif risk_num >= 30:
-            verdict = "UNUSUAL"
-            severity = "MEDIUM"
-            action = "MONITOR TRAFFIC"
-            icon = "🟡"
+            verdict, severity, action, icon = "UNUSUAL", "MEDIUM", "MONITOR TRAFFIC", "🟡"
         else:
-            verdict = "BENIGN"
-            severity = "LOW"
-            action = "ALLOW"
-            icon = "🟢"
+            verdict, severity, action, icon = "BENIGN", "LOW", "ALLOW", "🟢"
     except:
-        verdict = "UNKNOWN"
-        severity = "INFO"
-        action = "MANUAL REVIEW"
-        icon = "⚪"
+        risk_num = 0
+        verdict, severity, action, icon = "UNKNOWN", "INFO", "MANUAL REVIEW", "⚪"
 
     # --- 2. Threat Intel ---
     if "hata" not in vt_data:
@@ -517,12 +505,11 @@ def generate_fallback_summary(domain_name: str, vt_data: dict, abuse_data: dict,
         vt_text = "N/A"
 
     if "hata" not in abuse_data:
-        abuse_score = abuse_data.get("abuseConfidenceScore", 0)
-        abuse_text = f"{abuse_score}% Confidence"
+        abuse_text = f"{abuse_data.get('abuseConfidenceScore', 0)}% Confidence"
     else:
         abuse_text = "N/A"
 
-    # --- 3. XAI Analysis ---
+    # --- 3. XAI Analysis (Mantık Düzeltmesi) ---
     xai_output = ""
     xai_data = kendi_model_skoru.get("xai_aciklama", {})
     
@@ -533,29 +520,38 @@ def generate_fallback_summary(domain_name: str, vt_data: dict, abuse_data: dict,
         trust_factors = [f for f in top_features if f.get('impact') == 'negative']
 
         if risk_factors:
-            xai_output += "*Risk Indicators:*\n"
+            xai_output += "*⚠️ Risk Drivers:*\n"
             for feat in risk_factors[:3]:
                 feat_name = feat['feature'].replace('TLD_Grouped_', '.').replace('DNSRecordType_', 'DNS: ')
                 xai_output += f"• {feat_name} `+{feat['shap_value']:.2f}`\n"
         
         if trust_factors:
             if risk_factors: xai_output += "\n"
-            xai_output += "*Safety Indicators:*\n"
-            for feat in trust_factors[:2]:
-                feat_name = feat['feature'].replace('DNSRecordType_', 'DNS: ').replace('TLD_Grouped_', '.')
+            xai_output += "*✅ Trust Indicators:*\n"
+            for feat in trust_factors[:3]:
+                feat_name = feat['feature']\
+                    .replace('DNSRecordType_', 'DNS: ')\
+                    .replace('TLD_Grouped_', '.')\
+                    .replace('NumericSequence', 'Numeric Seq')
                 xai_output += f"• {feat_name} `-{abs(feat['shap_value']):.2f}`\n"
-    else:
-        xai_output = "_No significant anomalies detected._"
+                
+    # --- [KRİTİK DÜZELTME] Eğer XAI boşsa ama Risk Yüksekse ---
+    if not xai_output:
+        if risk_num > 50:
+            # Risk yüksek ama XAI boş -> Bu genelde "Complex Pattern" veya "Missing IP Data" durumudur.
+            xai_output = "⚠️ **Advanced ML Detection:**\nThe model detected high-risk lexical patterns (e.g. domain structure, randomness) despite missing network data (No IP/ASN)."
+        else:
+            # Risk düşük ve XAI boş -> Sorun yok
+            xai_output = "_Behavioral analysis is neutral. No anomalous patterns detected._"
 
-    # --- JSON Return (String değil Sözlük döndürüyoruz ki Slack Bot parçalayabilsin) ---
-    # Not: Bu fonksiyon artık bir "Sözlük" (Dictionary) yapısı hazırlıyor.
+    # --- Return Dictionary ---
     return {
         "report_id": report_id,
         "timestamp": timestamp,
         "verdict": verdict,
         "severity": severity,
         "icon": icon,
-        "risk_score": risk_score,
+        "risk_score": risk_score_str,
         "action": action,
         "vt_text": vt_text,
         "abuse_text": abuse_text,
@@ -567,6 +563,7 @@ def generate_fallback_summary(domain_name: str, vt_data: dict, abuse_data: dict,
 @app.get("/")
 def read_root():
     return {"status": "online", "message": "ChatSecOps API Çalışıyor 🚀"}
+
 @app.get("/enrich-and-summarize/domain/{domain_name}")
 def enrich_and_summarize_domain(domain_name: str):
     logger.info(f"YENİ İSTEK ALINDI: Domain = {domain_name}")
@@ -580,10 +577,13 @@ def enrich_and_summarize_domain(domain_name: str):
         logger.info(f"⚠️ {domain_name} daha önce {memory_insights['analysis_count']} kez görüldü!")
     
     # === 2. OSINT: Public threat feeds kontrolü ===
-    osint_data = intel_engine.get_osint_data(domain_name)
-    
-    if osint_data.get("threats_detected"):
-        logger.warning(f"🚨 {domain_name} threat feed'lerde tespit edildi!")
+    # intel_engine nesnesini ChatSecOps_Intelligence modülünden import ettiğinden emin ol
+    try:
+        osint_data = intel_engine.get_osint_data(domain_name)
+        if osint_data.get("threats_detected"):
+            logger.warning(f"🚨 {domain_name} threat feed'lerde tespit edildi!")
+    except:
+        osint_data = {}
 
     # === 3. MEVCUT ANALİZ (TI + ML) ===
     vt_data = get_virustotal_data(domain_name)
@@ -645,7 +645,9 @@ Cevabını doğrudan rapor içeriğiyle başlat. Başlık kullanma.
 """
     
     # Threat hunting logic ekle
-    prompt_template += intel_engine.get_hunting_logic()
+    try:
+        prompt_template += intel_engine.get_hunting_logic()
+    except: pass
     
     print(f"      [>] Gemini AI sorgulanıyor...")
 
@@ -666,8 +668,41 @@ Cevabını doğrudan rapor içeriğiyle başlat. Başlık kullanma.
         print(f"      [⚠️] Gemini AI hatası: {e}")
         print(f"      [>] Yedek rapor oluşturuluyor...")
         
+        # Yedek rapor oluşturucu
         ai_summary = generate_fallback_summary(domain_name, vt_data, abuse_data, kendi_model_skoru)
         print(f"      [✅] Yedek rapor başarıyla oluşturuldu.")
+
+    # === [YENİ] PDF VE GRAFİK OLUŞTURMA (Arkadaşının Özelliği) ===
+    pdf_path = ""
+    try:
+        # Verileri hazırla
+        vt_stats = vt_data if "hata" not in vt_data else {}
+        
+        # Eğer summary sözlük ise (fallback durumu) içinden metni al
+        summary_text_for_pdf = ai_summary
+        if isinstance(ai_summary, dict):
+             summary_text_for_pdf = f"VERDICT: {ai_summary.get('verdict')}\nACTION: {ai_summary.get('action')}\n\nREASONING:\n{ai_summary.get('xai_output')}"
+
+        # --- [DÜZELTME BURADA] ---
+        # Risk skorundaki '%' işaretini temizle ve sayıya çevir
+        raw_score = kendi_model_skoru.get("risk_skoru_yuzde", "0")
+        try:
+            # Önce stringe çevir, sonra % işaretini sil, sonra float yap
+            risk_float = float(str(raw_score).replace("%", ""))
+        except ValueError:
+            risk_float = 0.0
+        # -------------------------
+
+        pdf_path = create_pdf_report(
+            domain=domain_name,
+            ai_summary=summary_text_for_pdf,
+            risk_score=risk_float,  # Temizlenmiş float değeri gönderiyoruz
+            vt_stats=vt_stats
+        )
+        print(f"      [📄] PDF Rapor hazır: {pdf_path}")
+    except Exception as e:
+        print(f"      [⚠️] PDF Oluşturma Hatası: {e}")
+
 
     # === 6. YANITI OLUŞTUR ===
     response_data = {
@@ -677,10 +712,11 @@ Cevabını doğrudan rapor içeriğiyle başlat. Başlık kullanma.
             "virustotal": vt_data,
             "abuseipdb": abuse_data,
             "kendi_modelimiz": kendi_model_skoru,
-            "osint": osint_data  # YENİ
+            "osint": osint_data
         },
-        "memory_insights": memory_insights,  # YENİ
-        "campaign_alert": campaign_detection,  # YENİ
+        "memory_insights": memory_insights,
+        "campaign_alert": campaign_detection,
+        "pdf_report": pdf_path, # PDF yolunu da döndür
     }
     
     if gemini_error:
