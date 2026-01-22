@@ -1,12 +1,10 @@
 """
-ChatSecOps_Memory.py
-Tehdit İstihbarat Hafıza Sistemi
-
-Özellikler:
-- Her analizi veritabanına kaydet
-- Benzer domain'leri tespit et
-- Temporal pattern analizi (aynı IP'den gelen domain'ler)
-- Threat actor profiling (campaign detection)
+ChatSecOps_Memory.py - Optimized Database Schema
+Changes:
+- Added indexes for fast queries
+- WAL mode for concurrent access
+- Proper timestamp types
+- Query optimization
 """
 
 import sqlite3
@@ -14,11 +12,10 @@ from datetime import datetime
 from typing import List, Dict, Optional
 import json
 from difflib import SequenceMatcher
-import re
 
 class ThreatMemoryEngine:
     """
-    Akıllı tehdit hafıza sistemi
+    OPTIMIZED: Production-ready database design
     """
     
     def __init__(self, db_path: str = "chatsecops_memory.db"):
@@ -26,16 +23,21 @@ class ThreatMemoryEngine:
         self._init_database()
     
     def _init_database(self):
-        """Veritabanını oluştur"""
+        """Initialize database with optimizations"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Ana analiz tablosu
+        # Enable WAL mode (Write-Ahead Logging) for concurrent access
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")  # Performance boost
+        cursor.execute("PRAGMA cache_size=10000")     # 10MB cache
+        
+        # Main analysis table (UPDATED: INTEGER timestamp)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS domain_analysis (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 domain TEXT NOT NULL,
-                timestamp TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
                 risk_score REAL,
                 prediction INTEGER,
                 ip_address TEXT,
@@ -51,27 +53,56 @@ class ThreatMemoryEngine:
             )
         """)
         
-        # Domain similarity index
+        # === CRITICAL: Add indexes for fast queries ===
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_domain 
+            ON domain_analysis(domain)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_timestamp 
+            ON domain_analysis(timestamp DESC)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ip 
+            ON domain_analysis(ip_address)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_prediction 
+            ON domain_analysis(prediction, timestamp)
+        """)
+        
+        # Domain similarity (with index)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS domain_similarity (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 domain1 TEXT,
                 domain2 TEXT,
                 similarity_score REAL,
-                detected_at TEXT
+                detected_at INTEGER
             )
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sim_domain1 
+            ON domain_similarity(domain1)
+        """)
         
-        # IP clustering
+        # IP clusters (UPDATED)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS ip_clusters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ip_address TEXT,
-                domain_count INTEGER,
-                first_seen TEXT,
-                last_seen TEXT,
+                ip_address TEXT UNIQUE,
+                domain_count INTEGER DEFAULT 1,
+                first_seen INTEGER,
+                last_seen INTEGER,
                 threat_level TEXT
             )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_ip_threat 
+            ON ip_clusters(threat_level, domain_count DESC)
         """)
         
         # Campaign tracking
@@ -81,21 +112,21 @@ class ThreatMemoryEngine:
                 campaign_name TEXT,
                 indicators TEXT,
                 domain_count INTEGER,
-                created_at TEXT,
-                last_activity TEXT
+                created_at INTEGER,
+                last_activity INTEGER
             )
         """)
         
         conn.commit()
         conn.close()
-        print("✅ [Memory] Veritabanı hazır")
+        print("✅ [Memory] Optimized database ready with indexes")
     
     def store_analysis(self, domain: str, analysis_data: dict):
-        """Analiz sonucunu kaydet"""
+        """Store analysis with proper timestamp"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Veriyi parse et
+        # Parse data
         model_data = analysis_data.get("ham_veriler", {}).get("kendi_modelimiz", {})
         vt_data = analysis_data.get("ham_veriler", {}).get("virustotal", {})
         abuse_data = analysis_data.get("ham_veriler", {}).get("abuseipdb", {})
@@ -105,12 +136,14 @@ class ThreatMemoryEngine:
         ip_address = model_data.get("tespit_edilen_ip", "N/A")
         country = model_data.get("tespit_edilen_ulke", "N/A")
         
-        # XAI özetini al
+        # XAI summary
         xai_data = model_data.get("xai_aciklama", {})
         xai_summary = json.dumps(xai_data) if xai_data else None
         
-        # TLD'yi çıkar
         tld = domain.split('.')[-1] if '.' in domain else 'unknown'
+        
+        # UPDATED: Use UNIX timestamp (integer)
+        timestamp_unix = int(datetime.now().timestamp())
         
         cursor.execute("""
             INSERT INTO domain_analysis 
@@ -119,7 +152,7 @@ class ThreatMemoryEngine:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             domain,
-            datetime.now().isoformat(),
+            timestamp_unix,
             risk_score,
             prediction,
             ip_address,
@@ -133,16 +166,16 @@ class ThreatMemoryEngine:
         
         conn.commit()
         
-        # IP clustering güncelle
+        # Update IP cluster
         self._update_ip_cluster(cursor, ip_address, domain, risk_score)
         
-        # Benzer domain'leri kontrol et
+        # Find similar domains
         similar_domains = self._find_similar_domains(cursor, domain)
         
         conn.commit()
         conn.close()
         
-        print(f"✅ [Memory] {domain} kaydedildi (Risk: {risk_score}%)")
+        print(f"✅ [Memory] {domain} stored (Risk: {risk_score}%)")
         
         return {
             "stored": True,
@@ -151,40 +184,51 @@ class ThreatMemoryEngine:
         }
     
     def _update_ip_cluster(self, cursor, ip_address: str, domain: str, risk_score: float):
-        """IP clustering güncelle"""
+        """Update IP clustering (Fixed UPSERT pattern)"""
         if ip_address == "N/A":
             return
         
-        # IP daha önce görüldü mü?
-        cursor.execute("SELECT * FROM ip_clusters WHERE ip_address = ?", (ip_address,))
+        threat_level = "HIGH" if risk_score >= 80 else "MEDIUM" if risk_score >= 50 else "LOW"
+        timestamp_unix = int(datetime.now().timestamp())
+        
+        # Check if IP exists
+        cursor.execute("SELECT id, domain_count FROM ip_clusters WHERE ip_address = ?", (ip_address,))
         existing = cursor.fetchone()
         
-        threat_level = "HIGH" if risk_score >= 80 else "MEDIUM" if risk_score >= 50 else "LOW"
-        
         if existing:
-            # Güncelle
+            # Update existing record
             cursor.execute("""
                 UPDATE ip_clusters 
                 SET domain_count = domain_count + 1,
                     last_seen = ?,
                     threat_level = ?
                 WHERE ip_address = ?
-            """, (datetime.now().isoformat(), threat_level, ip_address))
+            """, (timestamp_unix, threat_level, ip_address))
         else:
-            # Yeni kayıt
+            # Insert new record
             cursor.execute("""
-                INSERT INTO ip_clusters 
-                (ip_address, domain_count, first_seen, last_seen, threat_level)
+                INSERT INTO ip_clusters (ip_address, domain_count, first_seen, last_seen, threat_level)
                 VALUES (?, 1, ?, ?, ?)
-            """, (ip_address, datetime.now().isoformat(), datetime.now().isoformat(), threat_level))
+            """, (ip_address, timestamp_unix, timestamp_unix, threat_level))
     
     def _find_similar_domains(self, cursor, domain: str, threshold: float = 0.7) -> List[Dict]:
-        """Benzer domain'leri bul (typosquatting detection)"""
-        cursor.execute("SELECT domain, risk_score FROM domain_analysis WHERE domain != ?", (domain,))
-        all_domains = cursor.fetchall()
+        """Find similar domains (typosquatting)"""
+        
+        # OPTIMIZED: Only check domains from last 90 days
+        cutoff_time = int((datetime.now().timestamp() - 90*24*3600))
+        
+        cursor.execute("""
+            SELECT domain, risk_score 
+            FROM domain_analysis 
+            WHERE domain != ? AND timestamp > ?
+            ORDER BY timestamp DESC
+            LIMIT 500
+        """, (domain, cutoff_time))
+        
+        recent_domains = cursor.fetchall()
         
         similar = []
-        for stored_domain, risk_score in all_domains:
+        for stored_domain, risk_score in recent_domains:
             similarity = self._calculate_similarity(domain, stored_domain)
             if similarity >= threshold:
                 similar.append({
@@ -193,85 +237,113 @@ class ThreatMemoryEngine:
                     "risk_score": risk_score
                 })
                 
-                # Similarity kaydı ekle
+                # Store similarity record
+                timestamp_unix = int(datetime.now().timestamp())
                 cursor.execute("""
                     INSERT INTO domain_similarity (domain1, domain2, similarity_score, detected_at)
                     VALUES (?, ?, ?, ?)
-                """, (domain, stored_domain, similarity, datetime.now().isoformat()))
+                """, (domain, stored_domain, similarity, timestamp_unix))
         
-        return similar[:5]  # En çok 5 benzer domain döndür
+        return similar[:5]
     
     def _calculate_similarity(self, domain1: str, domain2: str) -> float:
-        """İki domain arasındaki benzerliği hesapla"""
-        # TLD'yi çıkar
+        """Calculate domain similarity"""
         name1 = '.'.join(domain1.split('.')[:-1])
         name2 = '.'.join(domain2.split('.')[:-1])
-        
         return SequenceMatcher(None, name1, name2).ratio()
     
     def get_domain_insights(self, domain: str) -> Dict:
-        """Domain hakkında hafıza sisteminden içgörüler al"""
+        """Get insights with optimized query (FIXED: timestamp handling)"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Domain daha önce analiz edilmiş mi?
+        # Single optimized query
         cursor.execute("""
-            SELECT COUNT(*), AVG(risk_score), MIN(timestamp), MAX(timestamp)
-            FROM domain_analysis WHERE domain = ?
+            SELECT 
+                COUNT(*) as count,
+                AVG(risk_score) as avg_risk,
+                MIN(timestamp) as first_seen,
+                MAX(timestamp) as last_seen,
+                ip_address
+            FROM domain_analysis 
+            WHERE domain = ?
         """, (domain,))
         
-        count, avg_risk, first_seen, last_seen = cursor.fetchone()
+        row = cursor.fetchone()
         
-        insights = {
-            "is_known": count > 0,
-            "analysis_count": count,
-            "avg_risk_score": round(avg_risk, 2) if avg_risk else None,
-            "first_seen": first_seen,
-            "last_seen": last_seen
-        }
-        
-        # Aynı IP'den gelen domain'leri bul
-        if count > 0:
-            cursor.execute("""
-                SELECT ip_address FROM domain_analysis 
-                WHERE domain = ? ORDER BY timestamp DESC LIMIT 1
-            """, (domain,))
+        if row and row[0] > 0:
+            count, avg_risk, first_seen, last_seen, ip_addr = row
             
-            ip = cursor.fetchone()
-            if ip and ip[0] != "N/A":
+            # CRITICAL FIX: Handle both string and integer timestamps
+            def safe_timestamp_convert(ts_value):
+                """Convert timestamp to ISO format, handling both string and int"""
+                if ts_value is None:
+                    return None
+                try:
+                    # Try as integer (UNIX timestamp)
+                    if isinstance(ts_value, (int, float)):
+                        return datetime.fromtimestamp(ts_value).isoformat()
+                    # Try as string (ISO format or UNIX string)
+                    elif isinstance(ts_value, str):
+                        # Check if it's already ISO format
+                        if 'T' in ts_value or '-' in ts_value:
+                            return ts_value  # Already ISO
+                        # Try to convert string to int (UNIX timestamp as string)
+                        return datetime.fromtimestamp(int(float(ts_value))).isoformat()
+                    return None
+                except (ValueError, TypeError, OSError):
+                    return None
+            
+            insights = {
+                "is_known": True,
+                "analysis_count": count,
+                "avg_risk_score": round(avg_risk, 2) if avg_risk else None,
+                "first_seen": safe_timestamp_convert(first_seen),
+                "last_seen": safe_timestamp_convert(last_seen)
+            }
+            
+            # Co-hosted domains check
+            if ip_addr and ip_addr != "N/A":
                 cursor.execute("""
-                    SELECT COUNT(DISTINCT domain) FROM domain_analysis 
+                    SELECT COUNT(DISTINCT domain) 
+                    FROM domain_analysis 
                     WHERE ip_address = ? AND domain != ?
-                """, (ip[0], domain))
+                """, (ip_addr, domain))
                 
-                cohosted_count = cursor.fetchone()[0]
-                insights["cohosted_domains"] = cohosted_count
-                insights["ip_address"] = ip[0]
+                cohosted = cursor.fetchone()[0]
+                insights["cohosted_domains"] = cohosted
+                insights["ip_address"] = ip_addr
+        else:
+            insights = {"is_known": False, "analysis_count": 0}
         
         conn.close()
         return insights
     
     def get_campaign_detection(self, domain: str) -> Optional[Dict]:
-        """Bu domain bir campaign'in parçası mı?"""
+        """
+        Detect if this domain is part of a campaign
+        Checks TLD-based campaigns and similar patterns
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Domain pattern'lerini kontrol et
-        # Örnek: aynı TLD, benzer isim yapısı, aynı IP bloğu
+        # Extract TLD
+        tld = domain.split('.')[-1] if '.' in domain else 'unknown'
         
-        # TLD bazlı campaign
-        tld = domain.split('.')[-1]
+        # Check for TLD-based campaign (last 7 days)
+        week_ago = int(datetime.now().timestamp() - 7*86400)
+        
         cursor.execute("""
             SELECT COUNT(*), AVG(risk_score) 
             FROM domain_analysis 
-            WHERE tld = ? AND prediction = 1 AND timestamp > datetime('now', '-7 days')
-        """, (tld,))
+            WHERE tld = ? AND prediction = 1 AND timestamp > ?
+        """, (tld, week_ago))
         
         tld_campaign_count, tld_avg_risk = cursor.fetchone()
         
         campaign_data = None
         
-        # Eğer son 7 günde aynı TLD'den 5+ malicious domain varsa
+        # If 5+ malicious domains with same TLD in last 7 days
         if tld_campaign_count and tld_campaign_count >= 5 and tld_avg_risk >= 70:
             campaign_data = {
                 "type": "TLD-based Campaign",
@@ -279,33 +351,31 @@ class ThreatMemoryEngine:
                 "domain_count": tld_campaign_count,
                 "avg_risk": round(tld_avg_risk, 2),
                 "timeframe": "Last 7 days",
-                "recommendation": f"⚠️ ALERT: .{tld} TLD'si aktif campaign'de kullanılıyor!"
+                "recommendation": f"⚠️ ALERT: .{tld} TLD is being actively used in a campaign!"
             }
         
         conn.close()
         return campaign_data
     
     def get_statistics(self) -> Dict:
-        """Sistem istatistikleri"""
+        """Get system statistics (OPTIMIZED)"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Toplam analiz
+        # Total analyses
         cursor.execute("SELECT COUNT(*) FROM domain_analysis")
-        total_analyses = cursor.fetchone()[0]
+        total = cursor.fetchone()[0]
         
-        # Malicious oranı
+        # Malicious count
         cursor.execute("SELECT COUNT(*) FROM domain_analysis WHERE prediction = 1")
-        malicious_count = cursor.fetchone()[0]
+        malicious = cursor.fetchone()[0]
         
-        # Son 24 saat
-        cursor.execute("""
-            SELECT COUNT(*) FROM domain_analysis 
-            WHERE timestamp > datetime('now', '-1 day')
-        """)
+        # Last 24h (UNIX timestamp)
+        cutoff = int(datetime.now().timestamp() - 24*3600)
+        cursor.execute("SELECT COUNT(*) FROM domain_analysis WHERE timestamp > ?", (cutoff,))
         last_24h = cursor.fetchone()[0]
         
-        # En sık görülen TLD'ler
+        # Top TLDs
         cursor.execute("""
             SELECT tld, COUNT(*) as cnt 
             FROM domain_analysis 
@@ -313,9 +383,9 @@ class ThreatMemoryEngine:
             ORDER BY cnt DESC 
             LIMIT 5
         """)
-        top_tlds = cursor.fetchall()
+        top_tlds = [{"tld": row[0], "count": row[1]} for row in cursor.fetchall()]
         
-        # High-risk IP'ler
+        # High-risk IPs
         cursor.execute("""
             SELECT ip_address, domain_count 
             FROM ip_clusters 
@@ -323,48 +393,27 @@ class ThreatMemoryEngine:
             ORDER BY domain_count DESC 
             LIMIT 5
         """)
-        high_risk_ips = cursor.fetchall()
+        high_risk_ips = [{"ip": row[0], "domain_count": row[1]} for row in cursor.fetchall()]
         
         conn.close()
         
         return {
-            "total_analyses": total_analyses,
-            "malicious_count": malicious_count,
-            "malicious_rate": round((malicious_count / total_analyses * 100), 2) if total_analyses > 0 else 0,
+            "total_analyses": total,
+            "malicious_count": malicious,
+            "malicious_rate": round((malicious / total * 100), 2) if total > 0 else 0,
             "last_24h_analyses": last_24h,
-            "top_tlds": [{"tld": tld, "count": cnt} for tld, cnt in top_tlds],
-            "high_risk_ips": [{"ip": ip, "domain_count": cnt} for ip, cnt in high_risk_ips]
+            "top_tlds": top_tlds,
+            "high_risk_ips": high_risk_ips
         }
-    
-    def add_analyst_feedback(self, domain: str, feedback: str, is_false_positive: bool = False):
-        """Analistin feedback'ini kaydet"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            UPDATE domain_analysis 
-            SET analyst_feedback = ?, false_positive = ?
-            WHERE domain = ?
-            ORDER BY timestamp DESC
-            LIMIT 1
-        """, (feedback, is_false_positive, domain))
-        
-        conn.commit()
-        conn.close()
-        
-        print(f"✅ [Memory] Analyst feedback kaydedildi: {domain}")
 
 
-# Singleton instance
+# Singleton
 memory_engine = ThreatMemoryEngine()
 
 
-# ============================================================================
-# SLACK KOMUTLARI İÇİN HELPER FUNCTIONS
-# ============================================================================
-
+# === Helper functions (keep existing) ===
 def format_memory_insights(insights: Dict) -> str:
-    """Memory insights in English"""
+    """Format memory insights for Slack"""
     if not insights.get("is_known"):
         return "ℹ️ *Memory:* First time analyzing this asset."
     
@@ -377,18 +426,18 @@ def format_memory_insights(insights: Dict) -> str:
         text += f"• Avg Risk Score: {insights['avg_risk_score']}%\n"
     
     if insights.get("cohosted_domains"):
-        text += f"• ⚠️ Co-hosted: {insights['cohosted_domains']} other domains detected on same IP!\n"
+        text += f"• ⚠️ Co-hosted: {insights['cohosted_domains']} other domains on same IP!\n"
     
     return text
 
 
 def format_similar_domains(similar: List[Dict]) -> str:
-    """Benzer domain'leri Slack formatında döndür"""
+    """Format similar domains for Slack"""
     if not similar:
         return ""
     
-    text = "\n🔍 *Benzer Domain'ler (Typosquatting Alert)*\n\n"
+    text = "\n🔍 *Similar Domains (Typosquatting Alert)*\n\n"
     for item in similar:
-        text += f"• `{item['domain']}` - Benzerlik: {item['similarity']*100:.0f}% | Risk: {item['risk_score']}%\n"
+        text += f"• `{item['domain']}` - Similarity: {item['similarity']*100:.0f}% | Risk: {item['risk_score']}%\n"
     
     return text

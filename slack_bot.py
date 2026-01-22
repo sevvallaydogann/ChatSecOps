@@ -1,12 +1,7 @@
 """
-ChatSecOps Slack Bot (Enterprise Edition v2.1)
-Features:
-- Professional Incident Reporting (Grid Layout)
-- Real-time Visual Evidence (Thum.io)
-- Interactive Action Buttons (PDF, Graph, Block)
-- Full English Localization
+slack_bot.py - FINAL HYBRID VERSION
+Combines the stability of the old bot with the new features (Shodan/OTX/English).
 """
-
 import os
 import requests
 import re
@@ -14,369 +9,310 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
 
-# Import helper modules
-# Ensure ChatSecOps_Memory and ChatSecOps_Intelligence are in the same folder
-from ChatSecOps_Memory import format_memory_insights, format_similar_domains
-from ChatSecOps_Intelligence import format_osint_results, intel_engine
-
 # Load Environment Variables
 load_dotenv()
 
 # Initialize Slack App
 app = App(token=os.getenv("SLACK_BOT_TOKEN"))
 
-# Backend API URL (FastAPI Server)
+# Backend API URL
 BACKEND_API = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 
-# --- 1. REPORT FORMATTING (Grid Layout + Buttons) ---
+# ============================================================================
+# HELPER: MESSAGE FORMATTER
+# ============================================================================
 
 def format_risk_message(data: dict) -> dict:
-    """Formats the API response into a Modern Enterprise Grid Layout with Buttons"""
-    domain = data.get("domain", "Unknown Asset")
+    """
+    Converts API response into a professional Slack message block.
+    Includes: VirusTotal, AbuseIPDB, AlienVault, Shodan, ML, and PDF Buttons.
+    """
+    domain = data.get("domain", "Unknown")
     
-    # Retrieve file paths for buttons (Passed from Backend)
-    pdf_path = data.get("pdf_report", "")
-    shap_path = data.get("shap_graph", "")
-
-    # Handle AI Summary (Convert to dict if string)
-    ai_summary_raw = data.get("ai_ozeti", {})
-    if isinstance(ai_summary_raw, str):
-        # Fallback if backend returns plain string
-        report_data = {"xai_output": ai_summary_raw, "verdict": "ANALYZED"}
+    # --- 1. AI Summary Handling ---
+    ai_raw = data.get("ai_ozeti", {})
+    if isinstance(ai_raw, dict):
+        # If fallback dictionary
+        verdict = ai_raw.get("verdict", "UNKNOWN")
+        risk_score = ai_raw.get("risk_score", "N/A")
+        action = ai_raw.get("action", "REVIEW")
+        ai_text = ai_raw.get("xai_output", "Analysis unavailable.")
     else:
-        report_data = ai_summary_raw
+        # If genuine Gemini text
+        verdict = "ANALYZED"
+        risk_score = "See Below"
+        action = "CHECK REPORT"
+        ai_text = str(ai_raw)
 
-    # Extract Report Data
-    report_id = report_data.get("report_id", "N/A")
-    timestamp = report_data.get("timestamp", "N/A")
-    verdict = report_data.get("verdict", "UNKNOWN")
-    severity = report_data.get("severity", "INFO")
-    icon = report_data.get("icon", "🛡️")
-    risk_score = report_data.get("risk_score", "0%")
-    action = report_data.get("action", "REVIEW")
-    vt_text = report_data.get("vt_text", "N/A")
-    abuse_text = report_data.get("abuse_text", "N/A")
-    xai_output = report_data.get("xai_output", "No details available.")
+    # --- 2. Technical Data Extraction ---
+    raw = data.get("ham_veriler", {})
+    model_data = raw.get("kendi_modelimiz", {})
+    vt_data = raw.get("virustotal", {})
+    abuse_data = raw.get("abuseipdb", {})
+    osint_data = raw.get("osint", {}) # NEW: AlienVault & Shodan
 
-    # Extract Model Data
-    raw_data = data.get("ham_veriler", {})
-    model_data = raw_data.get("kendi_modelimiz", {})
+    # ML Specifics
+    ml_risk = model_data.get("risk_skoru_yuzde", "0%")
     detected_ip = model_data.get("tespit_edilen_ip", "N/A")
-    country = model_data.get("tespit_edilen_ulke", "N/A")
+    country = model_data.get("tespit_edilen_ulke", "Unknown")
 
-    blocks = []
-
-    # --- A. Header ---
-    blocks.append({
-        "type": "header",
-        "text": {
-            "type": "plain_text",
-            "text": f"{icon} Incident Report: {domain}",
-            "emoji": True
-        }
-    })
-
-    # --- B. Context (ID & Time) ---
-    blocks.append({
-        "type": "context",
-        "elements": [
-            {"type": "mrkdwn", "text": f"*Case ID:* `{report_id}`"},
-            {"type": "mrkdwn", "text": f"*Timestamp:* {timestamp}"}
-        ]
-    })
-    blocks.append({"type": "divider"})
-
-    # --- C. Visual Evidence (Thum.io) ---
+    # --- 3. Status Indicators & Logic ---
+    
+    # Risk Color Logic (Based on your old code preferences)
     try:
-        screenshot_url = intel_engine.get_visual_evidence(domain)
+        risk_num = float(ml_risk.replace("%", ""))
+        if risk_num >= 80:
+            emoji = "🔴"
+            color = "#d73a49" # Red
+            verdict = "CRITICAL"
+        elif risk_num >= 50:
+            emoji = "🟠"
+            color = "#fb8500" # Orange
+            verdict = "HIGH"
+        elif risk_num >= 20:
+            emoji = "🟡"
+            color = "#ffb700" # Yellow
+            verdict = "MEDIUM"
+        else:
+            emoji = "🟢"
+            color = "#28a745" # Green
+            verdict = "SAFE"
+    except:
+        emoji = "⚪"
+        color = "#586069"
+
+    # VirusTotal Status
+    if "hata" not in vt_data and vt_data:
+        vt_mal = vt_data.get("malicious", 0)
+        vt_total = sum(vt_data.values())
+        vt_icon = "🔴" if vt_mal > 0 else "✅"
+        vt_status = f"{vt_icon} {vt_mal}/{vt_total} flagged"
+    else:
+        vt_status = "⚪ Data Unavailable"
+
+    # AlienVault Status (NEW)
+    av = osint_data.get("alienvault", {})
+    if av and not av.get("error"):
+        av_count = av.get("pulse_count", 0)
+        av_icon = "🔴" if av_count > 0 else "✅"
+        av_status = f"{av_icon} {av_count} Pulses"
+    else:
+        av_status = "⚪ N/A"
+
+    # Shodan Status (NEW)
+    sho = osint_data.get("shodan", {})
+    if sho and not sho.get("error"):
+        ports = len(sho.get("ports", []))
+        vulns = len(sho.get("vulns", []))
+        sho_icon = "⚠️" if vulns > 0 else "ℹ️"
+        sho_status = f"{sho_icon} Ports: {ports} | Vulns: {vulns}"
+    else:
+        # Check why it failed
+        if detected_ip == "N/A" or not detected_ip:
+            sho_status = "⚪ No IP Resolved"
+        else:
+            sho_status = "⚪ Not Found"
+
+    # --- 4. Build Message Blocks ---
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"{emoji} Security Report: {domain}",
+                "emoji": True
+            }
+        },
+        {
+            "type": "section",
+            "fields": [
+                {"type": "mrkdwn", "text": f"*Verdict:*\n{verdict}"},
+                {"type": "mrkdwn", "text": f"*Risk Score:*\n{ml_risk}"},
+                {"type": "mrkdwn", "text": f"*IP Address:*\n`{detected_ip}`"},
+                {"type": "mrkdwn", "text": f"*Location:*\n{country}"}
+            ]
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "*🔬 Threat Intelligence Feeds*"
+            },
+            "fields": [
+                {"type": "mrkdwn", "text": f"*VirusTotal:*\n{vt_status}"},
+                {"type": "mrkdwn", "text": f"*AbuseIPDB:*\nScore: {abuse_data.get('abuseConfidenceScore', 'N/A')}%"},
+                {"type": "mrkdwn", "text": f"*AlienVault OTX:*\n{av_status}"},
+                {"type": "mrkdwn", "text": f"*Shodan:*\n{sho_status}"}
+            ]
+        },
+        {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*🤖 AI Analysis Summary*\n{ai_text[:600]}..." # Truncate if too long
+            }
+        }
+    ]
+    try:
+        # thum.io servisi ile canlı önizleme
+        img_url = f"https://image.thum.io/get/width/600/crop/800/noanimate/http://{domain}"
         blocks.append({
             "type": "image",
-            "title": {"type": "plain_text", "text": "🌐 Live Site Preview", "emoji": True},
-            "image_url": screenshot_url,
-            "alt_text": "visual_proof"
+            "image_url": img_url,
+            "alt_text": "site_preview",
+            "title": {"type": "plain_text", "text": "🌍 Live Site Preview"}
         })
     except:
         pass
-
-    # --- D. Executive Summary (Grid) ---
-    blocks.append({
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": "*🛡️ Executive Summary*"},
-        "fields": [
-            {"type": "mrkdwn", "text": f"*Verdict:*\n`{verdict}`"},
-            {"type": "mrkdwn", "text": f"*Severity:*\n{icon} {severity}"},
-            {"type": "mrkdwn", "text": f"*Risk Score:*\n{risk_score}"},
-            {"type": "mrkdwn", "text": f"*Action:*\n`{action}`"}
-        ]
-    })
-    blocks.append({"type": "divider"})
-
-    # --- E. Technical Intelligence (Grid) ---
-    blocks.append({
-        "type": "section",
-        "text": {"type": "mrkdwn", "text": "*🔬 Technical Intelligence*"},
-        "fields": [
-            {"type": "mrkdwn", "text": f"*VirusTotal:*\n{vt_text}"},
-            {"type": "mrkdwn", "text": f"*AbuseIPDB:*\n{abuse_text}"},
-            {"type": "mrkdwn", "text": f"*Hosting IP:*\n`{detected_ip}`"},
-            {"type": "mrkdwn", "text": f"*Location:*\n{country}"}
-        ]
-    })
-
-    # --- F. AI Reasoning ---
-    blocks.append({
-        "type": "section",
-        "text": {
-            "type": "mrkdwn",
-            "text": f"*🤖 AI Reasoning (Behavioral Analysis)*\n{xai_output}"
-        }
-    })
-    blocks.append({"type": "divider"})
-
-    # --- G. INTERACTIVE ACTION BUTTONS (New Feature) ---
-    action_elements = []
-    
-    # PDF Download Button
-    if pdf_path:
-        action_elements.append({
+    # --- 5. Add Action Buttons (PDF & Graph) ---
+    actions = []
+    if data.get("pdf_report"):
+        actions.append({
             "type": "button",
-            "text": {"type": "plain_text", "text": "📄 Download Report (PDF)", "emoji": True},
-            "style": "primary",
-            "value": pdf_path, # Path stored in button value
+            "text": {"type": "plain_text", "text": "📄 Download PDF"},
+            "value": data["pdf_report"],
             "action_id": "download_pdf"
         })
     
-    # SHAP Graph Button
-    if shap_path:
-        action_elements.append({
+    if data.get("shap_graph"):
+        actions.append({
             "type": "button",
-            "text": {"type": "plain_text", "text": "📊 View SHAP Graph", "emoji": True},
-            "value": shap_path,
+            "text": {"type": "plain_text", "text": "📊 Technical Graph"},
+            "value": data["shap_graph"],
             "action_id": "show_graph"
         })
 
-    # Block Button (Simulation)
-    action_elements.append({
-        "type": "button",
-        "text": {"type": "plain_text", "text": "⛔ Block Asset (Firewall)", "emoji": True},
-        "style": "danger",
-        "action_id": "block_action"
-    })
+    if actions:
+        blocks.append({"type": "actions", "elements": actions})
 
-    # Add buttons to blocks
-    if action_elements:
-        blocks.append({
-            "type": "actions",
-            "elements": action_elements
-        })
-    
     return {
+        "text": f"Report for {domain}: {verdict}",
         "blocks": blocks,
-        "text": f"Incident Report: {domain} - {verdict}"
+        "attachments": [{"color": color, "blocks": []}] # Sidebar color
     }
 
-# --- 2. COMMAND HANDLERS ---
-
-@app.message("analyze")
-@app.message("check")
-@app.message("scan")
-def analyze_domain(message, say):
-    """Main Analysis Command"""
-    text = message.get("text", "")
-    words = text.split()
-    
-    if len(words) < 2:
-        say("❌ *Error:* Please specify a domain.\nExample: `analyze google.com`")
-        return
-    
-    # Clean up Slack formatting (e.g., <http://google.com|google.com>)
-    raw_domain = words[1].strip()
-    domain = re.sub(r"<http[s]?://[^|]+\|([^>]+)>", r"\1", raw_domain)
-    domain = domain.replace("<", "").replace(">", "").replace("http://", "").replace("https://", "")
-
-    say(f"🔍 *{domain}* is being analyzed by SOAR Engine... Please wait.")
-    
-    try:
-        # Request analysis from Backend
-        response = requests.get(
-            f"{BACKEND_API}/enrich-and-summarize/domain/{domain}",
-            timeout=60
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            
-            # 1. Main Report with Buttons
-            message_blocks = format_risk_message(data)
-            say(**message_blocks)
-            
-            # 2. Memory Insights
-            memory_insights = data.get("memory_insights", {})
-            if memory_insights.get("is_known"):
-                say(format_memory_insights(memory_insights))
-            
-            # 3. Similar Domains
-            similar = data.get("similar_domains", [])
-            if similar:
-                say(format_similar_domains(similar))
-            
-            # 4. Campaign Alert
-            campaign = data.get("campaign_alert")
-            if campaign:
-                say(f"🚨 *CAMPAIGN ALERT*\n\n{campaign.get('recommendation', '')}")
-            
-            # 5. OSINT Results
-            osint_data = data.get("ham_veriler", {}).get("osint", {})
-            if osint_data.get("threats_detected"):
-                say(format_osint_results(osint_data))
-        
-        else:
-            say(f"❌ *Analysis Failed*\n```Status Code: {response.status_code}```")
-    
-    except requests.exceptions.Timeout:
-        say(f"⏱️ *Timeout:* Analysis took too long.")
-    except Exception as e:
-        say(f"❌ *Unexpected Error:*\n```{str(e)}```")
-
-@app.message("status")
-@app.message("durum")
-def status_command(message, say):
-    """Check System Health"""
-    try:
-        response = requests.get(f"{BACKEND_API}/", timeout=5)
-        if response.status_code == 200:
-            say("✅ *System Status:* Online & Operational\n🔗 Backend API connection established.")
-        else:
-            say("⚠️ *System Status:* Backend API is unreachable.")
-    except Exception as e:
-        say(f"❌ *System Error:* Connection failed\n```{str(e)}```")
-
-@app.message("stats")
-@app.message("statistics")
-def statistics_command(message, say):
-    """Show System Statistics"""
-    try:
-        response = requests.get(f"{BACKEND_API}/statistics", timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json().get("data", {})
-            
-            stats_message = f"""
-📊 *ChatSecOps System Statistics*
-
-*General Overview:*
-• Total Analysis: {data.get('total_analyses', 0):,}
-• Malicious Detections: {data.get('malicious_count', 0):,} ({data.get('malicious_rate', 0)}%)
-• Last 24h: {data.get('last_24h_analyses', 0):,} scans
-
-*Top Detected TLDs:*
-"""
-            for tld in data.get('top_tlds', [])[:5]:
-                stats_message += f"• .{tld['tld']}: {tld['count']} domains\n"
-            
-            stats_message += "\n*High-Risk IPs:*\n"
-            for ip in data.get('high_risk_ips', [])[:3]:
-                stats_message += f"• `{ip['ip']}`: {ip['domain_count']} domains\n"
-            
-            say(stats_message)
-        else:
-            say("❌ Statistics unavailable.")
-    except Exception as e:
-        say(f"❌ Error: {str(e)}")
+# ============================================================================
+# COMMAND HANDLERS
+# ============================================================================
 
 @app.message("help")
 def help_command(message, say):
-    """Help Menu"""
+    """English Help Menu"""
     help_text = """
 🛡️ *ChatSecOps SOAR - Command Menu*
 
-*📝 Core Analysis:*
-• `analyze <domain>` - Full Analysis (ML + TI + PDF Report)
-• `check <domain>` - Quick Check
-• `scan <domain>` - Deep Scan
+*🔍 Analysis Commands:*
+• `analyze <domain>` - Full security scan (VT, Shodan, OTX, AI)
+• `check <domain>` - Quick check
+• `scan <domain>` - Deep scan
 
-*🔍 Advanced:*
-• `similar <domain>` - Find Typosquatting (Similar Domains)
-• `stats` - System Statistics & Threat Landscape
-• `campaign` - Check for Active Campaigns
-• `feedback <domain> <comment>` - Submit Analyst Feedback
-
-*❓ Misc:*
-• `help` - Show this menu
-• `status` - Check System Health
+*📊 System:*
+• `stats` - View threat statistics
+• `status` - Check API connectivity
 
 *💡 Example:*
 `analyze google.com`
     """
     say(help_text)
 
-# --- 3. ACTION HANDLERS (Buttons) ---
+@app.message("status")
+def status_command(message, say):
+    """System Health Check"""
+    try:
+        response = requests.get(f"{BACKEND_API}/", timeout=5)
+        if response.status_code == 200:
+            say("✅ *System Status:* Online & Operational\n🔗 Backend API connected.")
+        else:
+            say("⚠️ *System Status:* Backend API reachable but returned error.")
+    except Exception as e:
+        say(f"❌ *System Status:* Connection Failed\n```{str(e)}```")
+
+@app.message("stats")
+def statistics_command(message, say):
+    """System Statistics"""
+    try:
+        response = requests.get(f"{BACKEND_API}/statistics", timeout=10)
+        if response.status_code == 200:
+            data = response.json().get("data", {})
+            msg = f"📊 *System Statistics*\n• Total Scans: {data.get('total_analyses', 0)}\n• Malicious: {data.get('malicious_count', 0)}"
+            say(msg)
+        else:
+            say("❌ Stats unavailable.")
+    except:
+        say("❌ Stats error.")
+
+@app.message("analyze")
+@app.message("check")
+@app.message("scan")
+def analyze_domain(message, say):
+    """Main Analysis Handler"""
+    text = message.get("text", "")
+    
+    # Extract Domain
+    words = text.split()
+    if len(words) < 2:
+        say("❌ *Error:* Please specify a domain.\n*Example:* `analyze example.com`")
+        return
+    
+    # Cleanup domain format (remove < > | from Slack links)
+    raw_domain = words[1].strip()
+    domain = re.sub(r"<http[s]?://[^|]+\|([^>]+)>", r"\1", raw_domain)
+    domain = domain.replace("<", "").replace(">", "").replace("http://", "").replace("https://", "").split("/")[0]
+    
+    say(f"🔍 Analyzing *{domain}*... Please wait.")
+    
+    try:
+        # Call Backend
+        response = requests.get(
+            f"{BACKEND_API}/enrich-and-summarize/domain/{domain}",
+            timeout=90
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            message_blocks = format_risk_message(data)
+            say(**message_blocks)
+            
+            # Memory Insight
+            mem = data.get("memory_insights", {})
+            if mem.get("is_known"):
+                say(f"🧠 *Memory:* This domain was analyzed {mem['analysis_count']} times before.")
+        else:
+            say(f"❌ *Analysis Failed*\nStatus: {response.status_code}")
+            
+    except requests.exceptions.Timeout:
+        say(f"⏱️ *Timeout:* Analysis took too long.")
+    except Exception as e:
+        say(f"❌ *Error:* {str(e)}")
+
+# ============================================================================
+# ACTION HANDLERS (Buttons)
+# ============================================================================
 
 @app.action("download_pdf")
-def handle_pdf_download(ack, body, client):
-    """Handles PDF Download Button Click"""
+def handle_pdf(ack, body, client):
     ack()
-    
     filepath = body['actions'][0]['value']
-    channel_id = body['channel']['id']
-    
-    try:
-        if os.path.exists(filepath):
-            # Upload the file to Slack
-            client.files_upload_v2(
-                channel=channel_id,
-                file=filepath,
-                title="Incident Report (PDF)",
-                initial_comment="📄 *Forensic Report Generated successfully.*"
-            )
-        else:
-            client.chat_postMessage(channel=channel_id, text="⚠️ PDF file not found on server.")
-    except Exception as e:
-        client.chat_postMessage(channel=channel_id, text=f"❌ Upload Error: {str(e)}")
+    channel = body['channel']['id']
+    if os.path.exists(filepath):
+        client.files_upload_v2(channel=channel, file=filepath, title="Security Report")
+    else:
+        client.chat_postMessage(channel=channel, text="⚠️ PDF file not found.")
 
 @app.action("show_graph")
-def handle_graph_show(ack, body, client):
-    """Handles SHAP Graph Button Click"""
+def handle_graph(ack, body, client):
     ack()
-    
     filepath = body['actions'][0]['value']
-    channel_id = body['channel']['id']
-    
-    try:
-        if os.path.exists(filepath):
-            client.files_upload_v2(
-                channel=channel_id,
-                file=filepath,
-                title="XAI Analysis Graph",
-                initial_comment="📊 *Explainable AI (SHAP) Analysis Graph*"
-            )
-        else:
-            client.chat_postMessage(channel=channel_id, text="⚠️ Graph file not found.")
-    except Exception as e:
-        client.chat_postMessage(channel=channel_id, text=f"❌ Upload Error: {str(e)}")
-
-@app.action("block_action")
-def handle_block(ack, body, client):
-    """Handles Block Button Click"""
-    ack()
-    user = body['user']['id']
-    client.chat_postMessage(
-        channel=body['channel']['id'], 
-        text=f"🛡️ *Firewall Rule Initiated!* Asset blocked by <@{user}>.\n_Ticket created in ITSM._"
-    )
-
-@app.event("app_mention")
-def handle_mention(event, say):
-    text = event.get("text", "").lower()
-    if "help" in text:
-        help_command(event, say)
+    channel = body['channel']['id']
+    if os.path.exists(filepath):
+        client.files_upload_v2(channel=channel, file=filepath, title="XAI Graph")
     else:
-        say(f"👋 Hello! Use `analyze <domain>` to start a security scan.")
+        client.chat_postMessage(channel=channel, text="⚠️ Graph file not found.")
 
 # --- MAIN ---
 
 if __name__ == "__main__":
-    print("🚀 ChatSecOps Slack Bot (Enterprise v2.1) is starting...")
-    print(f"🔗 Connected to Backend: {BACKEND_API}")
-    
+    print("🚀 ChatSecOps Slack Bot (Hybrid v5.0) is starting...")
     SocketModeHandler(app, os.getenv("SLACK_APP_TOKEN")).start()
