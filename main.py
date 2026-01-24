@@ -437,6 +437,10 @@ def enrich_and_summarize_domain(domain_name: str):
     memory_engine.store_analysis(domain_name, response)
     return response
 
+
+@app.get("/")
+def read_root():
+    return {"status": "ChatSecOps API is running", "docs_url": "/docs"}
 @app.get("/statistics")
 def get_stats():
     return {"status": "success", "data": memory_engine.get_statistics()}
