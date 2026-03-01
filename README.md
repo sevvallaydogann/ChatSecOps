@@ -20,7 +20,7 @@ The system takes a suspicious domain or IP, runs it through a trained ML classif
 A LightGBM classifier trained on 90,000 domains (45k benign, 45k malicious) extracts 284 features covering lexical patterns, DNS records, network infrastructure, and WHOIS data. It achieves 99.75% accuracy with a training time of 0.69 seconds, which means the model can be retrained regularly as the threat landscape evolves.
 
 **Explainability (SHAP)**  
-Every prediction comes with a SHAP waterfall chart showing exactly which features drove the decision. Analysts can see *why* a domain was flagged — not just that it was.
+Each prediction is accompanied by a SHAP waterfall visualization that highlights the key features influencing the model’s decision. This enables analysts to understand not only *what* was predicted, but also *why* it was predicted.
 
 **Threat Intelligence Fusion**  
 The system queries four sources in parallel:
