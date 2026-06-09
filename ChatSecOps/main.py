@@ -14,6 +14,7 @@ import time
 import json
 import logging
 import ast
+import sqlite3
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -24,6 +25,8 @@ import google.generativeai as genai
 from ChatSecOps_Analytics import create_pdf_report 
 from ChatSecOps_Memory import memory_engine, format_memory_insights, format_similar_domains
 from ChatSecOps_Intelligence import intel_engine, enrich_with_osint, format_osint_results 
+from ChatSecOps_NLQuery import nl_query_engine
+from ChatSecOps_Pivot import pivot_engine
 
 logging.basicConfig(
     level=logging.INFO,
@@ -513,6 +516,45 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
         del response["ham_veriler"]["kendi_modelimiz"]["model_input_df"]
     
     memory_engine.store_analysis(domain_name, response)
+    
+    PIVOT_INTEGRATION_CODE = '''
+    # ---------------------------------------------------------------
+    # FEATURE 2: IOC Pivot Zinciri
+    # IP tespit edildiyse pivot analizi arka planda başlat
+    # ---------------------------------------------------------------
+    ip = response["ham_veriler"]["kendi_modelimiz"].get("tespit_edilen_ip")
+    risk_num = response.get("ham_veriler", {}).get("kendi_modelimiz", {})
+    
+    # risk_score_num zaten hesaplanmış, ip de var — pivot çalıştır
+    if ip and ip != "N/A":
+        try:
+            pivot_result = pivot_engine.run_pivot(
+                trigger_domain=domain_name,
+                ip_address=ip,
+                trigger_risk_score=risk_score_num
+            )
+            
+            # Pivot sonucunu ana response'a ekle
+            response["pivot_chain"] = {
+                "triggered": pivot_result["pivot_triggered"],
+                "ip_address": pivot_result["ip_address"],
+                "total_related": pivot_result["total_related"],
+                "auto_analyzed_count": len(pivot_result["auto_analyzed"])
+            }
+            
+            # Slack'e pivot bildirimini ayrıca gönder (ilişkili domain varsa)
+            if pivot_result["pivot_triggered"] and pivot_result["slack_message"]:
+                logger.info(f"[PIVOT] Slack bildirimi gönderiliyor...")
+                # Slack webhook veya bot üzerinden gönder
+                _send_pivot_to_slack(pivot_result["slack_message"])
+                
+        except Exception as e:
+            logger.error(f"[PIVOT] Pivot analizi başlatılamadı: {e}")
+            response["pivot_chain"] = {"triggered": False, "error": str(e)}
+    else:
+        response["pivot_chain"] = {"triggered": False, "reason": "IP tespit edilemedi"}
+    # ---------------------------------------------------------------
+'''
     logger.info(f"✅ Analiz tamamlandı ({response['processing_time']}s) - AI: {response['ai_provider']}")
     
     return response
@@ -525,3 +567,112 @@ def read_root():
 @app.get("/statistics")
 def get_stats():
     return {"status": "success", "data": memory_engine.get_statistics()}
+
+def _send_pivot_to_slack(message: str):
+    """Pivot zinciri bildirimini Slack'e gönderir."""
+    slack_webhook = os.getenv("SLACK_WEBHOOK_URL")
+    if slack_webhook:
+        try:
+            requests.post(
+                slack_webhook,
+                json={"text": message},
+                timeout=5
+            )
+        except Exception as e:
+            logger.warning(f"[PIVOT] Slack webhook hatası: {e}")
+    else:
+        # Webhook yoksa slack_bot.py üzerinden gönderilir
+        # (slack_bot.py'deki pivot_result handling devreye girer)
+        logger.info("[PIVOT] Slack webhook bulunamadı, bot üzerinden iletilecek")
+ 
+ 
+@app.get("/pivot/{domain_name}")
+def get_pivot_chain(domain_name: str):
+    """
+    Belirli bir domain için pivot zincirini manuel çalıştır.
+    
+    Örnek: GET /pivot/example.com
+    
+    Bu endpoint:
+    - Domain'in IP'sini DB'den veya canlı çözerek alır
+    - Pivot zincirini çalıştırır
+    - Tüm ilişkili domainleri döndürür
+    """
+    logger.info(f"[PIVOT] Manuel pivot isteği: {domain_name}")
+    
+    # Önce DB'den son bilinen IP'yi al
+    conn = sqlite3.connect("chatsecops_memory.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT ip_address FROM domain_analysis WHERE domain = ? ORDER BY timestamp DESC LIMIT 1",
+        (domain_name,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    
+    ip = row[0] if row else None
+    
+    # DB'de yoksa canlı çöz
+    if not ip or ip == "N/A":
+        ip = get_ip_from_domain(domain_name)
+    
+    if not ip:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{domain_name} için IP adresi tespit edilemedi."
+        )
+    
+    # Risk skoru
+    risk_score = 0.0
+    if row:
+        conn = sqlite3.connect("chatsecops_memory.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT risk_score FROM domain_analysis WHERE domain = ? ORDER BY timestamp DESC LIMIT 1",
+            (domain_name,)
+        )
+        r = cursor.fetchone()
+        conn.close()
+        risk_score = r[0] if r else 0.0
+    
+    pivot_result = pivot_engine.run_pivot(
+        trigger_domain=domain_name,
+        ip_address=ip,
+        trigger_risk_score=risk_score
+    )
+    
+    return {
+        "domain": domain_name,
+        "ip_address": ip,
+        "pivot_result": pivot_result
+    }
+
+
+# ============================================================================
+# NEW FEATURE : DOĞAL DİL SORGU ARAYÜZÜ 
+# ============================================================================
+ 
+from ChatSecOps_NLQuery import nl_query_engine
+ 
+@app.get("/agent/ask")
+def ask_ai_agent(query: str):
+    """
+    Doğal dil sorusunu SQL\'e çevirip veritabanında çalıştırır.
+    Örnek: GET /agent/ask?query=Son 7 günde kaç zararlı domain var?
+    """
+    logger.info(f"🤖 AGENT SORGUSU: {query}")
+    
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="Soru boş olamaz.")
+    
+    result = nl_query_engine.ask(query.strip())
+    
+    return {
+        "question": query,
+        "answer": result["answer"],
+        "sql_generated": result["sql"],       # Debug için
+        "row_count": result["row_count"],
+        "success": result["success"]
+    }
+
+ 

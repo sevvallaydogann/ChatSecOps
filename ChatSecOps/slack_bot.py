@@ -8,6 +8,7 @@ import re
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
+from ChatSecOps_NLQuery import nl_query_engine
 
 # Load Environment Variables
 load_dotenv()
@@ -107,7 +108,6 @@ def format_risk_message(data: dict) -> dict:
         sho_icon = "⚠️" if vulns > 0 else "ℹ️"
         sho_status = f"{sho_icon} Ports: {ports} | Vulns: {vulns}"
     else:
-        # Check why it failed
         if detected_ip == "N/A" or not detected_ip:
             sho_status = "⚪ No IP Resolved"
         else:
@@ -156,7 +156,6 @@ def format_risk_message(data: dict) -> dict:
         }
     ]
     try:
-        # thum.io servisi ile canlı önizleme
         img_url = f"https://image.thum.io/get/width/600/crop/800/noanimate/http://{domain}"
         blocks.append({
             "type": "image",
@@ -166,6 +165,7 @@ def format_risk_message(data: dict) -> dict:
         })
     except:
         pass
+
     # --- 5. Add Action Buttons (PDF & Graph) ---
     actions = []
     if data.get("pdf_report"):
@@ -190,34 +190,46 @@ def format_risk_message(data: dict) -> dict:
     return {
         "text": f"Report for {domain}: {verdict}",
         "blocks": blocks,
-        "attachments": [{"color": color, "blocks": []}] # Sidebar color
+        "attachments": [{"color": color, "blocks": []}]
     }
 
 # ============================================================================
 # COMMAND HANDLERS
 # ============================================================================
 
-@app.message("help")
+# Düzeltme: Tam kelime eşleşmesi (Regex) kullanarak help çakışmasını engelliyoruz
+@app.message(re.compile(r"^help$", re.IGNORECASE))
 def help_command(message, say):
     """English Help Menu"""
     help_text = """
 🛡️ *ChatSecOps SOAR - Command Menu*
-
+ 
 *🔍 Analysis Commands:*
 • `analyze <domain>` - Full security scan (VT, Shodan, OTX, AI)
 • `check <domain>` - Quick check
 • `scan <domain>` - Deep scan
-
+ 
+*🤖 AI Query Interface (Feature 4):*
+• `query <soru>` - Veritabanına doğal dille sor
+• `ask <soru>` - Aynı işlev (İngilizce alternatif)
+ 
+*Örnek query komutları:*
+• `query Son 7 günde kaç zararlı domain var?`
+• `query En riskli 5 domain hangisi?`
+• `query Hangi ülkelerden tehdit geliyor?`
+• `query En çok hangi TLD zararlı?`
+• `query Aynı IP'yi paylaşan gruplar?`
+ 
 *📊 System:*
 • `stats` - View threat statistics
 • `status` - Check API connectivity
-
+ 
 *💡 Example:*
 `analyze google.com`
     """
     say(help_text)
 
-@app.message("status")
+@app.message(re.compile(r"^status$", re.IGNORECASE))
 def status_command(message, say):
     """System Health Check"""
     try:
@@ -229,7 +241,7 @@ def status_command(message, say):
     except Exception as e:
         say(f"❌ *System Status:* Connection Failed\n```{str(e)}```")
 
-@app.message("stats")
+@app.message(re.compile(r"^stats$", re.IGNORECASE))
 def statistics_command(message, say):
     """System Statistics"""
     try:
@@ -243,21 +255,20 @@ def statistics_command(message, say):
     except:
         say("❌ Stats error.")
 
-@app.message("analyze")
-@app.message("check")
-@app.message("scan")
+# Düzeltme: Komutların mesajın başında olduğunu garanti altına alan ve çakışmayan Regex yapısı
+@app.message(re.compile(r"^(analyze|check|scan)\s+(.*)", re.IGNORECASE))
 def analyze_domain(message, say):
     """Main Analysis Handler"""
-    text = message.get("text", "")
+    text = message.get("text", "").strip()
     
-    # Extract Domain
-    words = text.split()
-    if len(words) < 2:
+    match = re.match(r"^(analyze|check|scan)\s+(.*)", text, re.IGNORECASE)
+    if not match:
         say("❌ *Error:* Please specify a domain.\n*Example:* `analyze example.com`")
         return
+        
+    raw_domain = match.group(2).strip()
     
     # Cleanup domain format (remove < > | from Slack links)
-    raw_domain = words[1].strip()
     domain = re.sub(r"<http[s]?://[^|]+\|([^>]+)>", r"\1", raw_domain)
     domain = domain.replace("<", "").replace(">", "").replace("http://", "").replace("https://", "").split("/")[0]
     
@@ -275,6 +286,11 @@ def analyze_domain(message, say):
             message_blocks = format_risk_message(data)
             say(**message_blocks)
             
+            if pivot.get("triggered") and pivot.get("total_related", 0) > 0:
+                   say(f"🕸️ *Pivot Zinciri:* Bu IP üzerinde "
+                        f"{pivot['total_related']} ilişkili domain tespit edildi. "
+                        f"{pivot.get('auto_analyzed_count', 0)} yeni domain otomatik analiz edildi.")  
+            
             # Memory Insight
             mem = data.get("memory_insights", {})
             if mem.get("is_known"):
@@ -286,6 +302,64 @@ def analyze_domain(message, say):
         say(f"⏱️ *Timeout:* Analysis took too long.")
     except Exception as e:
         say(f"❌ *Error:* {str(e)}")
+
+@app.message(re.compile(r"^(query|ask|sor)\s+(.*)", re.IGNORECASE))
+def handle_nl_query(message, say):
+    """
+    Feature 4: Doğal Dil Sorgu Arayüzü
+    Kullanım: query <soru>
+    """
+    text = message.get("text", "").strip()
+    match = re.match(r"^(query|ask|sor)\s+(.*)", text, re.IGNORECASE)
+    
+    if not match:
+        say(
+            "❓ *Nasıl kullanılır:*\n"
+            "`query <sorunuz>` veya `ask <sorunuz>`\n\n"
+            "*Örnek sorular:*\n"
+            "• `query Son 7 günde kaç zararlı domain tespit ettik?`"
+        )
+        return
+        
+    user_question = match.group(2).strip()
+    
+    if not user_question:
+        say("❓ Lütfen bir soru yazın. Örnek: `query Son 24 saatte ne analiz edildi?`")
+        return
+    
+    say(f"🤖 Sorunuz işleniyor: _{user_question}_")
+    
+    try:
+        result = nl_query_engine.ask(user_question)
+        answer = result.get("answer", "Yanıt alınamadı.")
+        row_count = result.get("row_count", 0)
+        success = result.get("success", False)
+        
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*🤖 SOC Asistanı*\n\n{answer}"
+                }
+            }
+        ]
+        
+        if success and row_count > 0:
+            blocks.append({
+                "type": "context",
+                "elements": [
+                    {
+                        "type": "mrkdwn",
+                        "text": f"📌 _{row_count} kayıt üzerinden analiz yapıldı_"
+                    }
+                ]
+            })
+        
+        say(blocks=blocks, text=answer)
+        
+    except Exception as e:
+        say(f"❌ Sorgu işlenirken hata oluştu: `{str(e)}`")
 
 # ============================================================================
 # ACTION HANDLERS (Buttons)
