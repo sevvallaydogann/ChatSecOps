@@ -27,6 +27,7 @@ from ChatSecOps_Memory import memory_engine, format_memory_insights, format_simi
 from ChatSecOps_Intelligence import intel_engine, enrich_with_osint, format_osint_results 
 from ChatSecOps_NLQuery import nl_query_engine
 from ChatSecOps_Pivot import pivot_engine
+from ChatSecOps_URLParser import url_parser
 
 logging.basicConfig(
     level=logging.INFO,
@@ -517,13 +518,12 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
     
     memory_engine.store_analysis(domain_name, response)
     
-    PIVOT_INTEGRATION_CODE = '''
     # ---------------------------------------------------------------
     # FEATURE 2: IOC Pivot Zinciri
     # IP tespit edildiyse pivot analizi arka planda başlat
     # ---------------------------------------------------------------
+    
     ip = response["ham_veriler"]["kendi_modelimiz"].get("tespit_edilen_ip")
-    risk_num = response.get("ham_veriler", {}).get("kendi_modelimiz", {})
     
     # risk_score_num zaten hesaplanmış, ip de var — pivot çalıştır
     if ip and ip != "N/A":
@@ -554,7 +554,7 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
     else:
         response["pivot_chain"] = {"triggered": False, "reason": "IP tespit edilemedi"}
     # ---------------------------------------------------------------
-'''
+
     logger.info(f"✅ Analiz tamamlandı ({response['processing_time']}s) - AI: {response['ai_provider']}")
     
     return response
@@ -649,10 +649,108 @@ def get_pivot_chain(domain_name: str):
 
 
 # ============================================================================
-# NEW FEATURE : DOĞAL DİL SORGU ARAYÜZÜ 
+# FEATURE 1: PHISHING URL ANALİZİ
 # ============================================================================
  
-from ChatSecOps_NLQuery import nl_query_engine
+from urllib.parse import quote
+ 
+@app.get("/analyze-url")
+def analyze_url(url: str):
+    """
+    Tam URL'yi analiz eder. Domain analizi + URL yapısal analizi birleştirir.
+    
+    Örnek: GET /analyze-url?url=hxxps://paypal-security.tk/login?redirect=paypal.com
+    
+    Döndürür:
+    - Mevcut domain analizi (ML, VirusTotal, AbuseIPDB, OSINT)
+    - URL yapısal analizi (path, query, subdomain, brand impersonation)
+    - Kombine final skor
+    """
+    logger.info(f"[URL ANALIZ] Gelen URL: {url}")
+ 
+    # 1. URL'yi parçala
+    url_analysis = url_parser.analyze(url)
+    extracted_domain = url_analysis["extracted_domain"]
+    
+    logger.info(f"[URL ANALIZ] Çıkarılan domain: {extracted_domain}")
+    
+    if not extracted_domain:
+        raise HTTPException(status_code=400, detail="URL'den domain çıkarılamadı.")
+    
+    # 2. Mevcut domain analiz pipeline'ını çalıştır
+    # (enrich_and_summarize_domain fonksiyonunu direkt çağırıyoruz)
+    domain_result = enrich_and_summarize_domain(extracted_domain)
+    
+    # 3. ML skoru al
+    try:
+        ml_score = float(
+            domain_result["ham_veriler"]["kendi_modelimiz"]
+            .get("risk_skoru_yuzde", "0").replace("%", "")
+        )
+    except:
+        ml_score = 0.0
+    
+    # 4. URL boost'unu ekle
+    url_boost = url_analysis["url_risk_boost"]
+    combined_score = min(100.0, ml_score + url_boost)
+    
+    # 5. Kombine verdict — URL Risk Level de hesaba katılır
+    url_risk_level = url_analysis["risk_level"]
+
+    if url_risk_level == "CRITICAL" or combined_score >= 80:
+        combined_verdict = "CRITICAL"
+    elif url_risk_level == "HIGH" or combined_score >= 60:
+        combined_verdict = "MALICIOUS"
+    elif url_risk_level == "MEDIUM" or combined_score >= 40:
+        combined_verdict = "SUSPICIOUS"
+    else:
+        combined_verdict = "SAFE"
+    
+    # 6. Gemini ile URL bulgularını da dahil et
+    if gemini_model and url_analysis["findings"]:
+        url_prompt = f"""Sen bir SOC analistisin. Şu URL analiz bulgularını 2 cümleyle özetle:
+ 
+URL: {url}
+Domain Risk Skoru: {ml_score:.1f}%
+URL Yapısal Risk Puanı: +{url_boost}
+Kombine Final Skor: {combined_score:.1f}%
+Bulgular:
+{chr(10).join(url_analysis["findings"])}
+ 
+Türkçe, kısa (2-3 cümle) ve profesyonel bir özet yaz."""
+        
+        try:
+            url_ai_summary = gemini_model.generate_content(url_prompt).text
+        except:
+            url_ai_summary = url_analysis["summary"]
+    else:
+        url_ai_summary = url_analysis["summary"]
+    
+    # 7. Sonucu döndür
+    # Domain sonucuna URL analizini ekle
+    domain_result["url_analysis"] = {
+        "original_url":       url,
+        "normalized_url":     url_analysis["normalized_url"],
+        "extracted_domain":   extracted_domain,
+        "components":         url_analysis["components"],
+        "url_risk_boost":     url_boost,
+        "url_risk_level":     url_analysis["risk_level"],
+        "findings":           url_analysis["findings"],
+        "url_summary":        url_ai_summary,
+    }
+    domain_result["combined_score"]   = f"{combined_score:.1f}%"
+    domain_result["combined_verdict"] = combined_verdict
+    domain_result["analysis_type"]    = "full_url"
+    
+    logger.info(
+        f"[URL ANALIZ] Tamamlandı: ML={ml_score:.1f}% + URL={url_boost} = {combined_score:.1f}% ({combined_verdict})"
+    )
+    
+    return domain_result
+
+# ============================================================================
+# FEATURE 4 : DOĞAL DİL SORGU ARAYÜZÜ 
+# ============================================================================
  
 @app.get("/agent/ask")
 def ask_ai_agent(query: str):
