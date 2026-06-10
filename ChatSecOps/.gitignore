@@ -1,8 +1,7 @@
-# Sanal Ortam
-.venv/
-
-# Hassas Bilgi
+venv/
 .env
-
-# Python Önbellekleri
 __pycache__/
+*.db
+model_outputs/*.joblib
+model_outputs/*.json
+*
