@@ -1,7 +1,6 @@
 """
 ChatSecOps_MITRE.py — MITRE ATT&CK Taxonomic Mapping Engine (Feature 5)
 =========================================================================
-Makale Section 3.7'de tanımlanan deterministik eşleştirme motorudur.
 
 Girdi sinyalleri:
   - SHAP feature attributions (Entropy, TLD, HasSPFInfo, CreationDate...)
@@ -32,7 +31,6 @@ logger = logging.getLogger(__name__)
 
 # =============================================================================
 # ATT&CK TEKNİK KATALOĞU
-# Makalede belirtilen teknikler + tactic bağlamları
 # =============================================================================
 
 TECHNIQUE_CATALOG = {
@@ -141,9 +139,6 @@ class MITREMapper:
         # ------------------------------------------------------------------
         # T1566.002 — Spearphishing Link
         # Tetikleyici: URL engine brand impersonation, /login path, open redirect
-        # Makale: "Triggered automatically when our rule-based heuristic URL
-        #          engine flags significant brand impersonation, high-risk
-        #          directory paths (e.g., /login), or open-redirect query chains."
         # ------------------------------------------------------------------
         url_findings = url_analysis.get("findings", [])
         url_risk_level = url_analysis.get("url_risk_level", "LOW")
@@ -172,9 +167,6 @@ class MITREMapper:
         # ------------------------------------------------------------------
         # T1568.002 — Domain Generation Algorithms (DGA)
         # Tetikleyici: SHAP'ta yüksek Entropy + karakter dağılımı anomalisi
-        # Makale: "Evidenced directly when the top SHAP features indicate high
-        #          Shannon entropy levels and anomalous character distribution
-        #          patterns within the string payload."
         # ------------------------------------------------------------------
         dga_reasons = []
 
@@ -207,9 +199,6 @@ class MITREMapper:
         # ------------------------------------------------------------------
         # T1071.001 — Web Protocols C2
         # Tetikleyici: Shodan'da HTTP/C2 portları veya Pivot'ta paylaşılan altyapı
-        # Makale: "Flagged when the multi-source Pivot Engine correlates
-        #          infrastructure assets with active unencrypted HTTP transport
-        #          or known C2 ports exposed via Shodan network maps."
         # ------------------------------------------------------------------
         c2_reasons = []
 
@@ -244,7 +233,6 @@ class MITREMapper:
         # ------------------------------------------------------------------
         # T1583.001 — Acquire Infrastructure: Domains
         # Tetikleyici: CreationDate SHAP'ta üst sıralarda + yeni kayıt
-        # Makale: "78% of detected malicious domains registered within 30 days"
         # ------------------------------------------------------------------
         infra_reasons = []
 
