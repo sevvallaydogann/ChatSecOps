@@ -280,7 +280,7 @@ ChatSecOps/
 │   └── chatsecops_model_v2_20260114_203833_metadata.json   # Feature names, TLD list, config
 │
 ├── chatsecops_memory.db             # SQLite database (auto-created on first run)
-├── .env                             # API keys (never commit this file)
+├── .env                             # API keys 
 ├── requirements.txt                 # Python dependencies
 └── README.md
 ```
