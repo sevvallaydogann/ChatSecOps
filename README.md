@@ -53,12 +53,12 @@ ChatSecOps consists of five architectural layers: user interface, orchestration,
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Slack Interface                           │
-│              (slack_bot.py — Bolt Framework)                 │
+│                    Slack Interface                          │
+│              (slack_bot.py — Bolt Framework)                │
 └───────────────────────┬─────────────────────────────────────┘
                         │ HTTP
 ┌───────────────────────▼─────────────────────────────────────┐
-│               FastAPI Orchestration Layer                    │
+│               FastAPI Orchestration Layer                   │
 │                      (main.py)                              │
 │                                                             │
 │  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐  │
@@ -66,7 +66,7 @@ ChatSecOps consists of five architectural layers: user interface, orchestration,
 │  │  Classifier  │  │  URL Parser  │  │  Query Engine     │  │
 │  │  + SHAP XAI  │  │  (Feature 1) │  │  (Feature 4)      │  │
 │  └──────┬───────┘  └──────────────┘  └───────────────────┘  │
-│         │                                                    │
+│         │                                                   │
 │  ┌──────▼───────┐  ┌──────────────┐  ┌───────────────────┐  │
 │  │  Intelligence│  │  Pivot       │  │  MITRE ATT&CK     │  │
 │  │  Fusion      │  │  Engine      │  │  Taxonomic Mapper │  │
@@ -76,9 +76,9 @@ ChatSecOps consists of five architectural layers: user interface, orchestration,
 └─────────────────────────────────────────────────────────────┘
                         │
 ┌───────────────────────▼─────────────────────────────────────┐
-│                   SQLite Database (WAL mode)                 │
-│  domain_analysis | ip_clusters | domain_similarity |         │
-│  threat_campaigns                                            │
+│                   SQLite Database (WAL mode)                │
+│  domain_analysis | ip_clusters | domain_similarity |        │
+│  threat_campaigns                                           │
 └─────────────────────────────────────────────────────────────┘
 ```
 
