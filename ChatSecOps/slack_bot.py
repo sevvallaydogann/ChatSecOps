@@ -1,5 +1,5 @@
 """
-slack_bot.py - FINAL HYBRID VERSION
+slack_bot.py - HYBRID VERSION
 Combines the stability of the old bot with the new features (Shodan/OTX/English).
 Feature 1: URL analizi (tam URL desteği)
 Feature 4: Doğal dil sorgu arayüzü
@@ -12,6 +12,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
 from ChatSecOps_NLQuery import nl_query_engine
+from ChatSecOps_MITRE import mitre_mapper
 
 # Load Environment Variables
 load_dotenv()
@@ -352,6 +353,13 @@ def analyze_domain(message, say):
                 f"{pivot['total_related']} ilişkili domain tespit edildi. "
                 f"{pivot.get('auto_analyzed_count', 0)} yeni domain otomatik analiz edildi."
             )
+
+        # Feature 5: MITRE ATT&CK eşleşmelerini göster
+        mitre_result = data.get("mitre_attack", {})
+        if mitre_result and mitre_result.get("total_triggered", 0) > 0:
+            mitre_blocks = mitre_mapper.format_for_slack_block(mitre_result)
+            if mitre_blocks:
+                say(blocks=mitre_blocks, text="MITRE ATT\&CK Techniques Identified")
 
         # Memory Insight
         mem = data.get("memory_insights", {})

@@ -28,6 +28,7 @@ from ChatSecOps_Intelligence import intel_engine, enrich_with_osint, format_osin
 from ChatSecOps_NLQuery import nl_query_engine
 from ChatSecOps_Pivot import pivot_engine
 from ChatSecOps_URLParser import url_parser
+from ChatSecOps_MITRE import mitre_mapper
 
 logging.basicConfig(
     level=logging.INFO,
@@ -555,6 +556,21 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
         response["pivot_chain"] = {"triggered": False, "reason": "IP tespit edilemedi"}
     # ---------------------------------------------------------------
 
+    # ---------------------------------------------------------------
+    # FEATURE 5: MITRE ATT&CK TAKSONOMİK EŞLEŞTİRME
+    # ---------------------------------------------------------------
+    try:
+        mitre_result = mitre_mapper.map(response)
+        response["mitre_attack"] = mitre_result
+        logger.info(
+            f"[MITRE] {len(mitre_result['techniques'])} teknik eşleşti: "
+            f"{[t['technique_id'] for t in mitre_result['techniques']]}"
+        )
+    except Exception as e:
+        logger.error(f"[MITRE] Eşleştirme hatası: {e}")
+        response["mitre_attack"] = {"techniques": [], "total_triggered": 0}
+    # ---------------------------------------------------------------
+
     logger.info(f"✅ Analiz tamamlandı ({response['processing_time']}s) - AI: {response['ai_provider']}")
     
     return response
@@ -651,9 +667,7 @@ def get_pivot_chain(domain_name: str):
 # ============================================================================
 # FEATURE 1: PHISHING URL ANALİZİ
 # ============================================================================
- 
-from urllib.parse import quote
- 
+
 @app.get("/analyze-url")
 def analyze_url(url: str):
     """
@@ -741,11 +755,23 @@ Türkçe, kısa (2-3 cümle) ve profesyonel bir özet yaz."""
     domain_result["combined_score"]   = f"{combined_score:.1f}%"
     domain_result["combined_verdict"] = combined_verdict
     domain_result["analysis_type"]    = "full_url"
-    
+
+    # MITRE'yi URL bulguları eklendikten sonra yeniden çalıştır
+    # (ilk çalışma enrich_and_summarize_domain içinde url_analysis görmeden yapıldı)
+    try:
+        mitre_result = mitre_mapper.map(domain_result)
+        domain_result["mitre_attack"] = mitre_result
+        logger.info(
+            f"[MITRE/URL] {len(mitre_result['techniques'])} teknik eşleşti: "
+            f"{[t['technique_id'] for t in mitre_result['techniques']]}"
+        )
+    except Exception as e:
+        logger.error(f"[MITRE/URL] Hata: {e}")
+
     logger.info(
         f"[URL ANALIZ] Tamamlandı: ML={ml_score:.1f}% + URL={url_boost} = {combined_score:.1f}% ({combined_verdict})"
     )
-    
+
     return domain_result
 
 # ============================================================================
