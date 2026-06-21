@@ -21,7 +21,7 @@ Security Operations Centers face critical challenges from malicious domains used
 | Slack Bot Interface | ✅ Implemented | ✅ |
 | SQLite Threat Memory | ✅ Implemented | ✅ |
 | **Feature 1** — Phishing URL Parser | ✅ Implemented | ✅ |
-| **Feature 2** — IOC Pivot Chain | ✅ Implemented | ⚠️ Requires resolved IP |
+| **Feature 2** — IOC Pivot Chain | ✅ Implemented | ✅ |
 | **Feature 4** — NL Query Interface | ✅ Implemented | ✅ |
 | **Feature 5** — MITRE ATT&CK Mapper | ✅ Implemented | ✅ |
 
