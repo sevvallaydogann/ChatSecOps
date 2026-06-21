@@ -701,7 +701,7 @@ uvicorn main:app --reload --port 8000
 
 ---
 
-## 15. Authors & Citation
+## 15. Authors 
 
 ### Authors
 
@@ -712,21 +712,6 @@ uvicorn main:app --reload --port 8000
 
 Department of Computer Engineering, Faculty of Engineering and Natural Sciences  
 **Üsküdar University**, Istanbul, Turkey
-
-### Citation
-
-```bibtex
-@article{aydogan2026chatsecops,
-  title   = {ChatSecOps: A hybrid SOAR framework for automated threat analysis
-             using explainable AI and large language models},
-  author  = {Aydo{\u{g}}an, {\c{S}}evval and {\"U}st{\"u}n, Seray},
-  journal = {Turkish Journal of Electrical Engineering \& Computer Sciences},
-  volume  = {34},
-  pages   = {1--12},
-  year    = {2026},
-  doi     = {10.xxxx/chatsecops.2026}
-}
-```
 
 ### Acknowledgments
 
