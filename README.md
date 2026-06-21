@@ -43,7 +43,7 @@ Security Operations Centers face critical challenges from malicious domains used
 12. [Dataset](#12-dataset)
 13. [Replication Guide](#13-replication-guide)
 14. [Troubleshooting](#14-troubleshooting)
-15. [Authors & Citation](#15-authors--citation)
+15. [Authors](#15-authors--citation)
 
 ---
 
