@@ -13,6 +13,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
 from ChatSecOps_NLQuery import nl_query_engine
 from ChatSecOps_MITRE import mitre_mapper
+from ChatSecOps_Agent import secops_agent
 
 # Load Environment Variables
 load_dotenv()
@@ -151,7 +152,7 @@ def format_risk_message(data: dict) -> dict:
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*🤖 AI Analysis Summary*\n{ai_text[:600]}..."
+                "text": f"*🤖 AI Analysis Summary*\n{ai_text}"
             }
         }
     ]
@@ -263,25 +264,30 @@ def statistics_command(message, say):
         say("❌ Stats error.")
 
 
+# slack_bot.py içerisine import ekleyin:
+
+
 @app.message(re.compile(r"^(analyze|check|scan)\s+(.*)", re.IGNORECASE))
 def analyze_domain(message, say):
-    """
-    Main Analysis Handler.
-    Feature 1: Girdi tam URL ise /analyze-url endpoint'ine yönlendirir.
-    Feature 2: Pivot zinciri sonucunu Slack'e bildirir.
-    """
     text = message.get("text", "").strip()
-
     match = re.match(r"^(analyze|check|scan)\s+(.*)", text, re.IGNORECASE)
+    
     if not match:
-        say("❌ *Error:* Please specify a domain.\n*Example:* `analyze example.com`")
+        say("❌ *Error:* Please specify a domain or URL.")
         return
 
     raw_input = match.group(2).strip()
-
-    # Slack link formatını temizle: <https://example.com|example.com> → example.com
+    # Slack link temizleme yapılandırması
     raw_input = re.sub(r"<http[s]?://[^|]+\|([^>]+)>", r"\1", raw_input)
     raw_input = raw_input.replace("<", "").replace(">", "").strip()
+
+    say(f"🤖 *ChatSecOps AI Agent* is taking control. Investigating `{raw_input}` step-by-step...")
+
+    # Ajanı tetikliyoruz (Tüm araç çağrılarını o yönetecek)
+    agent_response = secops_agent.handle_message(f"Investigate this target: {raw_input}")
+    
+    # Ajanın ürettiği zenginleştirilmiş nihai analiz raporunu Slack'e basıyoruz
+    say(agent_response)
 
     # ---------------------------------------------------------------
     # Feature 1: URL mi, domain mi?
@@ -359,7 +365,7 @@ def analyze_domain(message, say):
         if mitre_result and mitre_result.get("total_triggered", 0) > 0:
             mitre_blocks = mitre_mapper.format_for_slack_block(mitre_result)
             if mitre_blocks:
-                say(blocks=mitre_blocks, text="MITRE ATT\&CK Techniques Identified")
+                say(blocks=mitre_blocks, text="MITRE ATT&CK Techniques Identified")
 
         # Memory Insight
         mem = data.get("memory_insights", {})
