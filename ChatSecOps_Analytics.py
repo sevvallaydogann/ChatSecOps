@@ -1,6 +1,6 @@
 """
-ChatSecOps_Analytics.py - PROFESSIONAL WHITE EDITION
-Kurumsal, ferah ve detaylı PDF raporlama motoru.
+ChatSecOps_Analytics.py - ENGLISH VERSION
+All Turkish text replaced with English for international publication
 """
 import os
 import matplotlib.pyplot as plt
@@ -8,31 +8,27 @@ from fpdf import FPDF
 from datetime import datetime
 import re
 
-# Matplotlib backend ayarı (GUI hatası almamak için)
 plt.switch_backend('Agg')
 
-# YENİ TEMA: Beyaz/Gri Kurumsal (Clean Corporate)
 THEME = {
-    'header_bg': (255, 255, 255),   # Beyaz Arka Plan
-    'text_primary': (33, 37, 41),   # Koyu Gri (Metinler)
-    'text_secondary': (108, 117, 125), # Açık Gri (Bilgi notları)
-    'accent_line': (222, 226, 230), # Çok açık gri (Çizgiler)
-    'box_bg': (248, 249, 250)       # Hafif gri kutular
+    'header_bg': (255, 255, 255),
+    'text_primary': (33, 37, 41),
+    'text_secondary': (108, 117, 125),
+    'accent_line': (222, 226, 230),
+    'box_bg': (248, 249, 250)
 }
 
 def clean_text(text):
-    """FPDF için karakter temizliği"""
+    """FPDF character cleanup"""
     if not isinstance(text, str): return str(text)
-    # Emojileri ve desteklenmeyen karakterleri temizle
-    text = re.sub(r'[^\x00-\x7F]+', ' ', text) 
-    # Türkçe karakter düzeltmesi
+    text = re.sub(r'[^\x00-\x7F]+', ' ', text)
+    # Turkish character mapping (for backwards compatibility)
     tr_map = {'ğ':'g', 'Ğ':'G', 'ş':'s', 'Ş':'S', 'ı':'i', 'İ':'I', 'ö':'o', 'Ö':'O', 'ü':'u', 'Ü':'U', 'ç':'c', 'Ç':'C'}
     for tr, en in tr_map.items(): text = text.replace(tr, en)
     return text
 
 class ProfessionalReport(FPDF):
     def header(self):
-        # Logo / Başlık Alanı (Sade)
         self.set_font('Arial', 'B', 20)
         self.set_text_color(*THEME['text_primary'])
         self.cell(0, 10, 'SECURITY ASSESSMENT', 0, 1, 'L')
@@ -41,7 +37,6 @@ class ProfessionalReport(FPDF):
         self.set_text_color(*THEME['text_secondary'])
         self.cell(0, 5, 'ChatSecOps Automated Intelligence Report', 0, 1, 'L')
         
-        # Altına ince gri çizgi
         self.set_draw_color(*THEME['accent_line'])
         self.set_line_width(0.5)
         self.line(10, 28, 200, 28)
@@ -58,27 +53,26 @@ class ProfessionalReport(FPDF):
         self.set_font('Arial', 'B', 12)
         self.set_text_color(*THEME['text_primary'])
         self.set_fill_color(*THEME['box_bg'])
-        self.cell(0, 8, f"  {title.upper()}", 0, 1, 'L', True) # Hafif gri bant içinde başlık
+        self.cell(0, 8, f"  {title.upper()}", 0, 1, 'L', True)
         self.ln(2)
 
 def generate_minimal_charts(risk_score):
-    """Risk bar grafiğini oluşturur"""
+    """Generate risk bar chart"""
     if not os.path.exists("static/charts"): os.makedirs("static/charts", exist_ok=True)
     
-    # Modern Risk Bar (Flat Design)
     plt.figure(figsize=(8, 1.5))
     
-    # Arkaplan çubuğu (Gri)
+    # Background bar (Gray)
     plt.barh([0], [100], color='#e9ecef', height=0.5)
     
-    # Risk çubuğu (Risk seviyesine göre renk)
+    # Risk bar (color by severity)
     color = '#dc3545' if risk_score > 75 else '#ffc107' if risk_score > 40 else '#28a745'
     plt.barh([0], [risk_score], color=color, height=0.5)
     
     plt.xlim(0, 100)
     plt.axis('off')
     
-    # Skor Metni
+    # Score text
     plt.text(risk_score + 1, 0, f"{risk_score:.1f}%", va='center', fontsize=12, fontweight='bold', color='#495057')
     
     filename = "static/charts/risk_bar_modern.png"
@@ -87,7 +81,6 @@ def generate_minimal_charts(risk_score):
     plt.close()
     return filename
 
-# İŞTE MAIN.PY'NIN ARADIĞI FONKSİYON BURADA:
 def create_pdf_report(domain, ai_summary, risk_score, vt_stats, abuse_data=None, osint_data=None, shap_path=None):
     pdf = ProfessionalReport()
     pdf.add_page()
@@ -109,30 +102,28 @@ def create_pdf_report(domain, ai_summary, risk_score, vt_stats, abuse_data=None,
     pdf.image(chart_path, x=10, y=pdf.get_y(), w=140)
     pdf.ln(25)
     
-    # Verdict Text
+    # Verdict
     verdict = "CRITICAL" if risk_score > 80 else "HIGH" if risk_score > 60 else "MEDIUM" if risk_score > 30 else "SAFE"
     pdf.set_font('Arial', 'B', 14)
     pdf.cell(0, 10, f"VERDICT: {verdict} RISK", 0, 1)
 
-    # 3. INTELLIGENCE TABLE (Detaylı)
+    # 3. INTELLIGENCE TABLE
     pdf.section_title("Threat Intelligence Fusion")
     
-    # Başlıklar
+    # Headers
     pdf.set_font('Arial', 'B', 9)
     pdf.set_fill_color(240, 240, 240)
     pdf.cell(50, 8, "Source", 1, 0, 'L', True)
     pdf.cell(100, 8, "Finding", 1, 0, 'L', True)
     pdf.cell(40, 8, "Status", 1, 1, 'C', True)
     
-    # Veri Satırları
+    # Data rows
     pdf.set_font('Arial', '', 9)
     
     def add_row(source, finding, status):
         pdf.cell(50, 8, clean_text(source), 1)
         pdf.cell(100, 8, clean_text(finding), 1)
         pdf.set_font('Arial', 'B', 9)
-        
-        # Duruma göre renkli metin (Opsiyonel, şimdilik siyah)
         pdf.cell(40, 8, clean_text(status), 1, 1, 'C')
         pdf.set_font('Arial', '', 9)
 
@@ -144,14 +135,13 @@ def create_pdf_report(domain, ai_summary, risk_score, vt_stats, abuse_data=None,
     add_row("VirusTotal", f"{vt_mal} security vendors flagged", "MALICIOUS" if vt_mal > 0 else "CLEAN")
     
     # AbuseIPDB
-    if abuse_data and "hata" not in abuse_data:
+    if abuse_data and "hata" not in abuse_data and "error" not in abuse_data:
         add_row("AbuseIPDB", f"Confidence: {abuse_data.get('abuseConfidenceScore', 0)}%", "HIGH" if abuse_data.get('abuseConfidenceScore', 0) > 50 else "LOW")
     else:
         add_row("AbuseIPDB", "No IP Address Resolved", "SKIPPED")
 
-    # --- YENİ OSINT GÖRÜNÜRLÜĞÜ ---
+    # AlienVault
     if osint_data:
-        # AlienVault
         av = osint_data.get('alienvault', {})
         if av and not av.get('error'):
             pulses = av.get('pulse_count', 0)
@@ -159,7 +149,7 @@ def create_pdf_report(domain, ai_summary, risk_score, vt_stats, abuse_data=None,
         else:
             add_row("AlienVault OTX", "No data / Error", "N/A")
         
-        # Shodan (Özel Kontrol: IP yoksa belirt)
+        # Shodan
         sho = osint_data.get('shodan')
         if sho:
             if sho.get('error'):
@@ -177,7 +167,7 @@ def create_pdf_report(domain, ai_summary, risk_score, vt_stats, abuse_data=None,
     pdf.section_title("AI Analysis & Reasoning")
     pdf.set_font('Arial', '', 9)
     
-    # Metni temizle ve yaz
+    # Clean text
     explanation = clean_text(str(ai_summary))
     explanation = explanation.replace('*', '').replace('#', '') 
     pdf.multi_cell(0, 5, explanation)
@@ -190,12 +180,11 @@ def create_pdf_report(domain, ai_summary, risk_score, vt_stats, abuse_data=None,
         pdf.write(5, "This chart visualizes the specific features that influenced the AI's decision.")
         pdf.ln(10)
         try:
-            # Resmi ortala ve sığdır
             pdf.image(shap_path, x=10, y=pdf.get_y(), w=190)
         except:
             pdf.write(5, "[Error rendering Graph]")
 
-    # Dosya Kaydetme
+    # Save file
     if not os.path.exists("static/reports"): os.makedirs("static/reports", exist_ok=True)
     filename = f"static/reports/Report_{clean_text(domain)}.pdf"
     try:
