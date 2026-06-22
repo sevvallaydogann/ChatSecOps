@@ -1,5 +1,14 @@
 # --- 1. GEREKLİ KÜTÜPHANELERİ İÇERİ AKTARMA ---
 import os
+import json
+import logging
+
+# ============================================================================
+# CRITICAL: AQ. FORMATININ ALGILANMASI VE v1beta ZORLAMASI
+# Google AI Studio yeni token yapılandırması için importlardan önce ayarlanmalıdır.
+# ============================================================================
+os.environ["GOOGLE_API_USE_V1BETA"] = "true"
+
 import requests
 import joblib
 import pandas as pd
@@ -11,8 +20,6 @@ import re
 from math import log2
 from collections import Counter
 import time
-import json
-import logging
 import ast
 import sqlite3
 
@@ -90,65 +97,16 @@ except Exception as e:
     model, scaler = None, None
 
 # ============================================================================
-# GEMİNİ YÜKLEME - API v1 DÜZELTİLMİŞ
+# GEMİNİ INITIALIZATION - MULTI-LLM UYUMLU SADELEŞTİRİLMİŞ SÜRÜM
+# Başlangıçtaki tüm kilitlenmelere sebep olan agresif döngü kaldırıldı.
 # ============================================================================
-
 try:
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY .env dosyasında bulunamadı!")
-    
-    genai.configure(api_key=GEMINI_API_KEY)
-    
-    # Mevcut modelleri listele ve tam isimlerini al
-    available_models = genai.list_models()
-    model_names = [m.name for m in available_models if 'generateContent' in m.supported_generation_methods]
-    
-    logger.info(f"📋 generateContent destekleyen modeller: {len(model_names)} adet")
-    
-    # İlk uygun modeli yazdır (debug için)
-    if model_names:
-        logger.info(f"   İlk model örneği: {model_names[0]}")
-    
-    # Doğru formatta model isimleri (models/ prefix'li)
-    model_priority = [
-        'models/gemini-1.5-flash-latest',
-        'models/gemini-1.5-flash',
-        'models/gemini-1.5-pro-latest',
-        'models/gemini-pro'
-    ]
-    
-    # Eğer yukarıdaki listede yoksa, mevcut modellerden ilkini kullan
-    if not any(m in model_names for m in model_priority):
-        logger.info("   ℹ️ Standart modeller bulunamadı, mevcut ilk model kullanılacak...")
-        model_priority = [model_names[0]] if model_names else []
-    
-    gemini_model = None
-    for model_name in model_priority:
-        try:
-            logger.info(f"   Deneniyor: {model_name}")
-            test_model = genai.GenerativeModel(model_name)
-            test_response = test_model.generate_content("Hello")
-            
-            # Başarılıysa kullan
-            gemini_model = test_model
-            logger.info(f"✅ [GEMINI] Model yüklendi: {model_name}")
-            logger.info(f"   Test yanıtı: {test_response.text[:50]}...")
-            break
-            
-        except Exception as e:
-            logger.warning(f"   ⚠️ {model_name} başarısız: {str(e)[:100]}")
-            continue
-    
-    if gemini_model is None:
-        raise Exception("Hiçbir Gemini modeli yüklenemedi")
-        
-except ValueError as ve:
-    logger.error(f"❌ [GEMINI] {ve}")
-    gemini_model = None
+    if GEMINI_API_KEY:
+        clean_gemini_key = GEMINI_API_KEY.strip().replace('"', '').replace("'", "")
+        genai.configure(api_key=clean_gemini_key)
+        logger.info("✅ [GEMINI] Base configuration initialized for main.py (v1beta router ready)")
 except Exception as e:
-    logger.error(f"❌ [GEMINI] Kritik hata: {e}")
-    logger.error(f"   API Key kontrolü: {GEMINI_API_KEY[:10] if GEMINI_API_KEY else 'YOK'}...")
-    gemini_model = None
+    logger.warning(f"⚠️ [GEMINI] Base configuration failed: {e}")
 
 # XAI Yükle
 if ModelExplainer:
@@ -373,7 +331,6 @@ def generate_fallback_summary(domain: str, vt: dict, abuse: dict, model: dict) -
     
     abuse_score = abuse.get("abuseConfidenceScore", 0) if abuse and "hata" not in abuse else 0
     
-    # Akıllı karar
     if vt_malicious >= 5 or abuse_score >= 70:
         verdict = "MALICIOUS"
         action = "BLOCK IMMEDIATELY"
@@ -436,6 +393,12 @@ def enrich_and_summarize_domain(domain_name: str):
     except:
         risk_score_num = 0.0
     
+    # ---------------------------------------------------------------
+    # DİNAMİK MULTI-LLM ROUTER SUMMARY ENGINE (KOTA DOSTU SÜRÜM)
+    # ---------------------------------------------------------------
+    ai_summary = None
+    gemini_failed = False
+
     prompt = f"""You are a SOC analyst. Analyze this domain security data:
 
 TARGET: {domain_name}
@@ -446,40 +409,59 @@ THREAT INTELLIGENCE:
 - ML Risk Score: {model_res.get('risk_skoru_yuzde')}
 - IP: {ip} ({model_res.get('tespit_edilen_ulke', 'Unknown')})
 
-TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."""
+TASK: Write a concise summary of exactly 3 sentences explaining verdict, evidence, and recommended action. Do not truncate mid-sentence."""
 
-    ai_summary = None
-    gemini_failed = False
-    
-    logger.info(f"🤖 Gemini durumu: {'Aktif' if gemini_model else 'İnaktif'}")
-    
-    if gemini_model:
-        for attempt in range(3):
-            try:
-                logger.info(f"   Gemini çağrısı deneme {attempt + 1}/3...")
-                response = gemini_model.generate_content(prompt)
-                
-                if hasattr(response, 'text') and response.text:
-                    ai_summary = response.text
-                    logger.info(f"   ✅ Gemini başarılı")
-                    break
-                    
-            except Exception as e:
-                logger.warning(f"   ⚠️ Hata: {e}")
-                if attempt < 2:
-                    time.sleep(2)
-                    continue
-                gemini_failed = True
-                break
-        
-        if ai_summary is None:
-            gemini_failed = True
-    else:
-        gemini_failed = True
-    
-    if gemini_failed or ai_summary is None:
-        logger.info("   🔄 Fallback kullanılıyor...")
+    # 1. ADIM: GEMINI DENENİYOR (Ping yok, direkt istek anında ayağa kalkar)
+    if GEMINI_API_KEY:
+        try:
+            logger.info("[MAIN ROUTER] Requesting summary from Gemini...")
+            g_model = genai.GenerativeModel('models/gemini-1.5-flash')
+            response = g_model.generate_content(prompt)
+            if response.text:
+                ai_summary = response.text
+                logger.info("✅ [MAIN ROUTER] Gemini successfully generated the summary.")
+        except Exception as e:
+            logger.warning(f"⚠️ [MAIN ROUTER] Gemini tier failed: {str(e)[:60]}")
+
+    # 2. ADIM: GEMINI KOTASI DOLDUYSA GROQ (LLAMA 3) DENENİYOR
+    if ai_summary is None and os.getenv("GROQ_API_KEY"):
+        try:
+            logger.info("[MAIN ROUTER] Gemini limits exhausted. Routing to Groq (Llama-3)...")
+            groq_key = os.getenv("GROQ_API_KEY")
+            payload = {
+                "model": "llama3-8b-8192",
+                "messages": [{"role": "user", "content": prompt}]
+            }
+            headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
+            res = requests.post("https://api.groq.com/openai/v1/chat/completions", json=payload, timeout=10)
+            if res.status_code == 200:
+                ai_summary = res.json()["choices"][0]["message"]["content"]
+                logger.info("✅ [MAIN ROUTER] Groq successfully generated the summary.")
+        except Exception as e:
+            logger.warning(f"⚠️ [MAIN ROUTER] Groq endpoint failed: {e}")
+
+    # 3. ADIM: YEDEK OLARAK OPENAI DENENİYOR
+    if ai_summary is None and os.getenv("OPENAI_API_KEY"):
+        try:
+            logger.info("[MAIN ROUTER] Routing to OpenAI cluster (GPT-4o-mini)...")
+            from openai import OpenAI
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            completion = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                timeout=10
+            )
+            ai_summary = completion.choices[0].message.content
+            logger.info("✅ [MAIN ROUTER] OpenAI successfully generated the summary.")
+        except Exception as e:
+            logger.warning(f"⚠️ [MAIN ROUTER] OpenAI fallback failed: {e}")
+
+    # 4. ADIM: TÜM SAĞLAYICILAR ÇÖKERSE KURAL TABANLI LOKAL MOTOR ÇALIŞIYOR
+    if ai_summary is None:
+        logger.info("🔄 [MAIN ROUTER] All external provider limits exhausted. Triggering local forensic engine.")
         ai_summary = generate_fallback_summary(domain_name, vt, abuse, model_res)
+        gemini_failed = True
+    # ---------------------------------------------------------------
     
     pdf_text = ""
     if isinstance(ai_summary, dict):
@@ -511,7 +493,7 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
         "pdf_report": pdf_path,
         "shap_graph": shap_file,
         "processing_time": round(time.time() - start_time, 2),
-        "ai_provider": "gemini" if not gemini_failed else "fallback"
+        "ai_provider": "router" if not gemini_failed else "fallback"
     }
     
     if "model_input_df" in response["ham_veriler"]["kendi_modelimiz"]:
@@ -519,14 +501,9 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
     
     memory_engine.store_analysis(domain_name, response)
     
-    # ---------------------------------------------------------------
     # FEATURE 2: IOC Pivot Zinciri
-    # IP tespit edildiyse pivot analizi arka planda başlat
-    # ---------------------------------------------------------------
-    
     ip = response["ham_veriler"]["kendi_modelimiz"].get("tespit_edilen_ip")
     
-    # risk_score_num zaten hesaplanmış, ip de var — pivot çalıştır
     if ip and ip != "N/A":
         try:
             pivot_result = pivot_engine.run_pivot(
@@ -535,7 +512,6 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
                 trigger_risk_score=risk_score_num
             )
             
-            # Pivot sonucunu ana response'a ekle
             response["pivot_chain"] = {
                 "triggered": pivot_result["pivot_triggered"],
                 "ip_address": pivot_result["ip_address"],
@@ -543,10 +519,8 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
                 "auto_analyzed_count": len(pivot_result["auto_analyzed"])
             }
             
-            # Slack'e pivot bildirimini ayrıca gönder (ilişkili domain varsa)
             if pivot_result["pivot_triggered"] and pivot_result["slack_message"]:
                 logger.info(f"[PIVOT] Slack bildirimi gönderiliyor...")
-                # Slack webhook veya bot üzerinden gönder
                 _send_pivot_to_slack(pivot_result["slack_message"])
                 
         except Exception as e:
@@ -554,11 +528,8 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
             response["pivot_chain"] = {"triggered": False, "error": str(e)}
     else:
         response["pivot_chain"] = {"triggered": False, "reason": "IP tespit edilemedi"}
-    # ---------------------------------------------------------------
 
-    # ---------------------------------------------------------------
     # FEATURE 5: MITRE ATT&CK TAKSONOMİK EŞLEŞTİRME
-    # ---------------------------------------------------------------
     try:
         mitre_result = mitre_mapper.map(response)
         response["mitre_attack"] = mitre_result
@@ -569,9 +540,8 @@ TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."
     except Exception as e:
         logger.error(f"[MITRE] Eşleştirme hatası: {e}")
         response["mitre_attack"] = {"techniques": [], "total_triggered": 0}
-    # ---------------------------------------------------------------
 
-    logger.info(f"✅ Analiz tamamlandı ({response['processing_time']}s) - AI: {response['ai_provider']}")
+    logger.info(f"✅ Analiz tamamlandı ({response['processing_time']}s) - AI Status: {response['ai_provider']}")
     
     return response
 
@@ -597,8 +567,6 @@ def _send_pivot_to_slack(message: str):
         except Exception as e:
             logger.warning(f"[PIVOT] Slack webhook hatası: {e}")
     else:
-        # Webhook yoksa slack_bot.py üzerinden gönderilir
-        # (slack_bot.py'deki pivot_result handling devreye girer)
         logger.info("[PIVOT] Slack webhook bulunamadı, bot üzerinden iletilecek")
  
  
@@ -606,17 +574,9 @@ def _send_pivot_to_slack(message: str):
 def get_pivot_chain(domain_name: str):
     """
     Belirli bir domain için pivot zincirini manuel çalıştır.
-    
-    Örnek: GET /pivot/example.com
-    
-    Bu endpoint:
-    - Domain'in IP'sini DB'den veya canlı çözerek alır
-    - Pivot zincirini çalıştırır
-    - Tüm ilişkili domainleri döndürür
     """
     logger.info(f"[PIVOT] Manuel pivot isteği: {domain_name}")
     
-    # Önce DB'den son bilinen IP'yi al
     conn = sqlite3.connect("chatsecops_memory.db")
     cursor = conn.cursor()
     cursor.execute(
@@ -628,7 +588,6 @@ def get_pivot_chain(domain_name: str):
     
     ip = row[0] if row else None
     
-    # DB'de yoksa canlı çöz
     if not ip or ip == "N/A":
         ip = get_ip_from_domain(domain_name)
     
@@ -638,7 +597,6 @@ def get_pivot_chain(domain_name: str):
             detail=f"{domain_name} için IP adresi tespit edilemedi."
         )
     
-    # Risk skoru
     risk_score = 0.0
     if row:
         conn = sqlite3.connect("chatsecops_memory.db")
@@ -672,30 +630,19 @@ def get_pivot_chain(domain_name: str):
 def analyze_url(url: str):
     """
     Tam URL'yi analiz eder. Domain analizi + URL yapısal analizi birleştirir.
-    
-    Örnek: GET /analyze-url?url=hxxps://paypal-security.tk/login?redirect=paypal.com
-    
-    Döndürür:
-    - Mevcut domain analizi (ML, VirusTotal, AbuseIPDB, OSINT)
-    - URL yapısal analizi (path, query, subdomain, brand impersonation)
-    - Kombine final skor
     """
-    logger.info(f"[URL ANALIZ] Gelen URL: {url}")
+    logger.info(f"https://context.reverso.net/translation/turkish-english/analiz Gelen URL: {url}")
  
-    # 1. URL'yi parçala
     url_analysis = url_parser.analyze(url)
     extracted_domain = url_analysis["extracted_domain"]
     
-    logger.info(f"[URL ANALIZ] Çıkarılan domain: {extracted_domain}")
+    logger.info(f"https://context.reverso.net/translation/turkish-english/analiz Çıkarılan domain: {extracted_domain}")
     
     if not extracted_domain:
         raise HTTPException(status_code=400, detail="URL'den domain çıkarılamadı.")
     
-    # 2. Mevcut domain analiz pipeline'ını çalıştır
-    # (enrich_and_summarize_domain fonksiyonunu direkt çağırıyoruz)
     domain_result = enrich_and_summarize_domain(extracted_domain)
     
-    # 3. ML skoru al
     try:
         ml_score = float(
             domain_result["ham_veriler"]["kendi_modelimiz"]
@@ -704,11 +651,9 @@ def analyze_url(url: str):
     except:
         ml_score = 0.0
     
-    # 4. URL boost'unu ekle
     url_boost = url_analysis["url_risk_boost"]
     combined_score = min(100.0, ml_score + url_boost)
     
-    # 5. Kombine verdict — URL Risk Level de hesaba katılır
     url_risk_level = url_analysis["risk_level"]
 
     if url_risk_level == "CRITICAL" or combined_score >= 80:
@@ -720,8 +665,8 @@ def analyze_url(url: str):
     else:
         combined_verdict = "SAFE"
     
-    # 6. Gemini ile URL bulgularını da dahil et
-    if gemini_model and url_analysis["findings"]:
+    # URL Analizi Gemini Router Entegrasyonu
+    if url_analysis["findings"]:
         url_prompt = f"""Sen bir SOC analistisin. Şu URL analiz bulgularını 2 cümleyle özetle:
  
 URL: {url}
@@ -733,15 +678,30 @@ Bulgular:
  
 Türkçe, kısa (2-3 cümle) ve profesyonel bir özet yaz."""
         
-        try:
-            url_ai_summary = gemini_model.generate_content(url_prompt).text
-        except:
+        url_ai_summary = None
+        
+        # URL Endpoint Gemini router denemesi
+        if GEMINI_API_KEY:
+            try:
+                g_model = genai.GenerativeModel('models/gemini-1.5-flash')
+                url_ai_summary = g_model.generate_content(url_prompt).text
+            except: pass
+            
+        # Groq Fallback
+        if url_ai_summary is None and os.getenv("GROQ_API_KEY"):
+            try:
+                payload = {"model": "llama3-8b-8192", "messages": [{"role": "user", "content": url_prompt}]}
+                headers = {"Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}", "Content-Type": "application/json"}
+                res = requests.post("https://api.groq.com/openai/v1/chat/completions", json=payload, timeout=10)
+                if res.status_code == 200:
+                    url_ai_summary = res.json()["choices"][0]["message"]["content"]
+            except: pass
+            
+        if url_ai_summary is None:
             url_ai_summary = url_analysis["summary"]
     else:
         url_ai_summary = url_analysis["summary"]
     
-    # 7. Sonucu döndür
-    # Domain sonucuna URL analizini ekle
     domain_result["url_analysis"] = {
         "original_url":       url,
         "normalized_url":     url_analysis["normalized_url"],
@@ -756,8 +716,6 @@ Türkçe, kısa (2-3 cümle) ve profesyonel bir özet yaz."""
     domain_result["combined_verdict"] = combined_verdict
     domain_result["analysis_type"]    = "full_url"
 
-    # MITRE'yi URL bulguları eklendikten sonra yeniden çalıştır
-    # (ilk çalışma enrich_and_summarize_domain içinde url_analysis görmeden yapıldı)
     try:
         mitre_result = mitre_mapper.map(domain_result)
         domain_result["mitre_attack"] = mitre_result
@@ -769,7 +727,7 @@ Türkçe, kısa (2-3 cümle) ve profesyonel bir özet yaz."""
         logger.error(f"[MITRE/URL] Hata: {e}")
 
     logger.info(
-        f"[URL ANALIZ] Tamamlandı: ML={ml_score:.1f}% + URL={url_boost} = {combined_score:.1f}% ({combined_verdict})"
+        f"https://context.reverso.net/translation/turkish-english/analiz Tamamlandı: ML={ml_score:.1f}% + URL={url_boost} = {combined_score:.1f}% ({combined_verdict})"
     )
 
     return domain_result
@@ -782,7 +740,6 @@ Türkçe, kısa (2-3 cümle) ve profesyonel bir özet yaz."""
 def ask_ai_agent(query: str):
     """
     Doğal dil sorusunu SQL\'e çevirip veritabanında çalıştırır.
-    Örnek: GET /agent/ask?query=Son 7 günde kaç zararlı domain var?
     """
     logger.info(f"🤖 AGENT SORGUSU: {query}")
     
@@ -794,9 +751,7 @@ def ask_ai_agent(query: str):
     return {
         "question": query,
         "answer": result["answer"],
-        "sql_generated": result["sql"],       # Debug için
+        "sql_generated": result["sql"],
         "row_count": result["row_count"],
         "success": result["success"]
     }
-
- 
