@@ -27,6 +27,8 @@ from ChatSecOps_Memory import memory_engine, format_memory_insights, format_simi
 from ChatSecOps_Intelligence import intel_engine, enrich_with_osint, format_osint_results 
 from ChatSecOps_NLQuery import nl_query_engine
 from ChatSecOps_Pivot import pivot_engine
+from ChatSecOps_URLParser import url_parser
+from ChatSecOps_MITRE import mitre_mapper
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,7 +41,7 @@ logger = logging.getLogger(__name__)
 try:
     from xai_explainer import ModelExplainer
 except Exception as e:
-    logger.error(f"❌ [HATA] XAI Explainer yüklenemedi: {e}")
+    print(f"❌ [HATA] XAI Explainer: {e}")
     ModelExplainer = None
 
 # Network Kütüphaneleri
@@ -51,7 +53,8 @@ except ImportError:
     dns = None
 
 # --- [DİNAMİK MODEL YAPILANDIRMASI] ---
-METADATA_PATH = 'model_outputs/chatsecops_model_v2_20260609_220654_metadata.json'
+METADATA_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833_metadata.json'
+
 try:
     with open(METADATA_PATH, 'r', encoding='utf-8') as f:
         meta = json.load(f)
@@ -59,14 +62,14 @@ try:
     COLUMNS_TO_SCALE = meta['preprocessing']['columns_to_scale']
     TOP_30_TLDS = meta['preprocessing']['top_30_tlds']
 except Exception as e:
-    logger.error(f"❌ [KRİTİK HATA] Metadata yüklenemedi: {e}")
+    print(f"❌ [KRİTİK HATA] Metadata yüklenemedi: {e}")
     TRAINING_COLUMNS, COLUMNS_TO_SCALE, TOP_30_TLDS = [], [], []
 
 if not TOP_30_TLDS:
     TOP_30_TLDS = ['com', 'net', 'online', 'org', 'ru', 'info', 'co.uk']
 
 # --- 2. KURULUM ---
-logger.info("[BİLGİ] SOAR Motoru başlatılıyor...")
+print("[BİLGİ] SOAR Motoru başlatılıyor...")
 load_dotenv()
 
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY")
@@ -77,56 +80,78 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 app = FastAPI(title="ChatSecOps SOAR Motoru")
 
 # Modeli Yükle
-MODEL_PATH = 'model_outputs/chatsecops_model_v2_20260609_220654.joblib'
-SCALER_PATH = 'model_outputs/chatsecops_model_v2_20260609_220654_scaler.joblib'
+MODEL_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833.joblib'
+SCALER_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833_scaler.joblib'
+
 try:
     model = joblib.load(MODEL_PATH)
     scaler = joblib.load(SCALER_PATH)
-    logger.info("✅ [ML] LightGBM Modeli ve Scaler başarıyla yüklendi.")
 except Exception as e:
-    logger.error(f"❌ [ML] Model yükleme hatası: {e}")
     model, scaler = None, None
 
 # ============================================================================
-# GEMİNİ YÜKLEME - EN GÜNCEL STABİL SÜRÜMLER
+# GEMİNİ YÜKLEME - API v1 DÜZELTİLMİŞ
 # ============================================================================
+
 try:
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY .env dosyasında bulunamadı!")
     
     genai.configure(api_key=GEMINI_API_KEY)
+    
+    # Mevcut modelleri listele ve tam isimlerini al
     available_models = genai.list_models()
     model_names = [m.name for m in available_models if 'generateContent' in m.supported_generation_methods]
     
-    # Bilimsel yayın ve kararlılık için 2.5 ve 1.5 sürümlerini önceliklendiriyoruz
+    logger.info(f"📋 generateContent destekleyen modeller: {len(model_names)} adet")
+    
+    # İlk uygun modeli yazdır (debug için)
+    if model_names:
+        logger.info(f"   İlk model örneği: {model_names[0]}")
+    
+    # Doğru formatta model isimleri (models/ prefix'li)
     model_priority = [
-        'models/gemini-2.5-flash',
         'models/gemini-1.5-flash-latest',
         'models/gemini-1.5-flash',
+        'models/gemini-1.5-pro-latest',
         'models/gemini-pro'
     ]
     
+    # Eğer yukarıdaki listede yoksa, mevcut modellerden ilkini kullan
     if not any(m in model_names for m in model_priority):
+        logger.info("   ℹ️ Standart modeller bulunamadı, mevcut ilk model kullanılacak...")
         model_priority = [model_names[0]] if model_names else []
     
     gemini_model = None
     for model_name in model_priority:
         try:
-            logger.info(f" 📡 Gemini deneniyor: {model_name}")
+            logger.info(f"   Deneniyor: {model_name}")
             test_model = genai.GenerativeModel(model_name)
             test_response = test_model.generate_content("Hello")
-            gemini_model = test_model
-            logger.info(f"✅ [GEMINI] Aktif model: {model_name}")
-            break
-        except Exception as e:
-            logger.warning(f" ⚠️ {model_name} başarısız: {str(e)[:50]}")
-            continue
             
+            # Başarılıysa kullan
+            gemini_model = test_model
+            logger.info(f"✅ [GEMINI] Model yüklendi: {model_name}")
+            logger.info(f"   Test yanıtı: {test_response.text[:50]}...")
+            break
+            
+        except Exception as e:
+            logger.warning(f"   ⚠️ {model_name} başarısız: {str(e)[:100]}")
+            continue
+    
+    if gemini_model is None:
+        raise Exception("Hiçbir Gemini modeli yüklenemedi")
+        
+except ValueError as ve:
+    logger.error(f"❌ [GEMINI] {ve}")
+    gemini_model = None
 except Exception as e:
     logger.error(f"❌ [GEMINI] Kritik hata: {e}")
+    logger.error(f"   API Key kontrolü: {GEMINI_API_KEY[:10] if GEMINI_API_KEY else 'YOK'}...")
     gemini_model = None
 
-if ModelExplainer and MODEL_PATH:
+# XAI Yükle
+if ModelExplainer:
     try:
         xai_explainer = ModelExplainer(MODEL_PATH)
     except:
@@ -134,10 +159,15 @@ if ModelExplainer and MODEL_PATH:
 else:
     xai_explainer = None
 
-ipinfo_handler = ipinfo.getHandler(IPINFO_TOKEN) if IPINFO_TOKEN else None
+# IPInfo Yükle
+try:
+    ipinfo_handler = ipinfo.getHandler(IPINFO_TOKEN)
+except:
+    ipinfo_handler = None
 
 
 # --- 3. YARDIMCI FONKSİYONLAR ---
+
 def get_virustotal_data(domain: str):
     url = f"https://www.virustotal.com/api/v3/domains/{domain}"
     headers = {"x-apikey": VIRUSTOTAL_API_KEY}
@@ -162,29 +192,51 @@ def get_abuseipdb_data(ip: str):
     return {"hata": "Veri bulunamadı"}
 
 def get_ip_from_domain(domain: str) -> str | None:
+    """4 Katmanlı IP Çözücü"""
     domain = domain.replace("https://", "").replace("http://", "").split("/")[0]
+    
+    # 1. Socket
     try:
         return socket.gethostbyname(domain)
-    except: pass
+    except:
+        pass
 
+    # 2. DNS Library
     if dns:
         try:
             resolver = dns.resolver.Resolver()
             resolver.nameservers = ['8.8.8.8', '8.8.4.4']
             answers = resolver.resolve(domain, 'A')
-            for rdata in answers: return rdata.to_text()
-        except: pass
+            for rdata in answers:
+                return rdata.to_text()
+        except:
+            pass
 
-    for doh_url in ["https://cloudflare-dns.com/dns-query", "https://dns.google/resolve"]:
-        try:
-            url = f"{doh_url}?name={domain}&type=A"
-            headers = {"Accept": "application/dns-json"} if "cloudflare" in doh_url else {}
-            response = requests.get(url, headers=headers, timeout=5)
-            data = response.json()
-            if "Answer" in data:
-                for answer in data["Answer"]:
-                    if answer["type"] == 1: return answer["data"]
-        except: pass
+    # 3. Cloudflare DoH
+    try:
+        url = f"https://cloudflare-dns.com/dns-query?name={domain}&type=A"
+        headers = {"Accept": "application/dns-json"}
+        response = requests.get(url, headers=headers, timeout=5)
+        data = response.json()
+        if "Answer" in data:
+            for answer in data["Answer"]:
+                if answer["type"] == 1:
+                    return answer["data"]
+    except:
+        pass
+
+    # 4. Google DoH
+    try:
+        url = f"https://dns.google/resolve?name={domain}&type=A"
+        response = requests.get(url, timeout=5)
+        data = response.json()
+        if "Answer" in data:
+            for answer in data["Answer"]:
+                if answer["type"] == 1:
+                    return answer["data"]
+    except:
+        pass
+
     return None
 
 def get_network_features(ip: str) -> dict:
@@ -270,6 +322,7 @@ def get_live_features_for_model(domain: str):
 
 def get_kendi_risk_skorumuz(domain: str) -> dict:
     if not model: return {"hata": "Model yüklenemedi"}
+    
     try:
         live_features, ip = get_live_features_for_model(domain)
         df = pd.DataFrame([live_features])
@@ -298,7 +351,6 @@ def get_kendi_risk_skorumuz(domain: str) -> dict:
             
         return {
             "risk_skoru_yuzde": f"{prob:.2f}%",
-            "tahmin_sinifi": int(prediction),
             "tespit_edilen_ip": ip,
             "tespit_edilen_ulke": live_features['CountryCode'],
             "xai_aciklama": explanation_data if explanation_data else {"hata": "XAI yok", "top_features": []},
@@ -308,31 +360,57 @@ def get_kendi_risk_skorumuz(domain: str) -> dict:
         return {"hata": str(e)}
 
 def generate_fallback_summary(domain: str, vt: dict, abuse: dict, model: dict) -> dict:
+    """Geliştirilmiş Fallback - Tüm verileri birleştirir"""
     score_str = model.get("risk_skoru_yuzde", "0")
-    try: ml_score = float(score_str.replace("%", ""))
-    except: ml_score = 0
+    try: 
+        ml_score = float(score_str.replace("%", ""))
+    except: 
+        ml_score = 0
     
     vt_malicious = vt.get("malicious", 0) if vt and "hata" not in vt else 0
     vt_total = sum(vt.values()) if vt and "hata" not in vt else 0
     vt_percentage = (vt_malicious / vt_total * 100) if vt_total > 0 else 0
+    
     abuse_score = abuse.get("abuseConfidenceScore", 0) if abuse and "hata" not in abuse else 0
     
+    # Akıllı karar
     if vt_malicious >= 5 or abuse_score >= 70:
-        verdict = "MALICIOUS"; action = "BLOCK IMMEDIATELY"
+        verdict = "MALICIOUS"
+        action = "BLOCK IMMEDIATELY"
         final_score = max(vt_percentage, abuse_score, ml_score)
     elif vt_malicious >= 2 or abuse_score >= 40 or ml_score >= 50:
-        verdict = "SUSPICIOUS"; action = "MONITOR CLOSELY"
+        verdict = "SUSPICIOUS"
+        action = "MONITOR CLOSELY"
         final_score = max(vt_percentage, abuse_score, ml_score)
     else:
-        verdict = "SAFE"; action = "NO ACTION REQUIRED"; final_score = ml_score
+        verdict = "SAFE"
+        action = "NO ACTION REQUIRED"
+        final_score = ml_score
     
-    explanation = f"VirusTotal: {vt_malicious}/{vt_total}. AbuseIPDB Score: {abuse_score}%. ML Score: {ml_score:.1f}%. Verdict: {verdict}."
-    return {"verdict": verdict, "action": action, "risk_score": f"{final_score:.1f}%", "xai_output": explanation}
+    explanation_parts = []
+    if vt_malicious > 0:
+        explanation_parts.append(f"VirusTotal detected {vt_malicious} out of {vt_total} security vendors flagging this domain as malicious.")
+    else:
+        explanation_parts.append("VirusTotal shows no security vendor flags.")
+    
+    if abuse_score > 0:
+        explanation_parts.append(f"AbuseIPDB reports an abuse confidence score of {abuse_score}%, indicating potential malicious activity.")
+    
+    explanation_parts.append(f"Our machine learning model calculated a behavioral risk score of {ml_score:.1f}%.")
+    explanation_parts.append(f"Based on the combined threat intelligence, the domain is classified as {verdict}. Recommended action: {action}.")
+    
+    return {
+        "verdict": verdict,
+        "action": action,
+        "risk_score": f"{final_score:.1f}%",
+        "xai_output": " ".join(explanation_parts)
+    }
 
-# --- 4. ANA ENDPOINT (ZENGİNLEŞTİRME VE ANALİZ) ---
+# --- 4. ANA ENDPOINT ---
+
 @app.get("/enrich-and-summarize/domain/{domain_name}")
 def enrich_and_summarize_domain(domain_name: str):
-    logger.info(f"🚨 ANALIZ TETİKLENDİ: {domain_name}")
+    logger.info(f"ANALIZ: {domain_name}")
     start_time = time.time()
 
     mem = memory_engine.get_domain_insights(domain_name)
@@ -342,51 +420,91 @@ def enrich_and_summarize_domain(domain_name: str):
     ip = model_res.get("tespit_edilen_ip")
     abuse = get_abuseipdb_data(ip)
     
-    try: osint = intel_engine.get_full_intel(domain_name, ip)
-    except: osint = {}
+    try:
+        osint = intel_engine.get_full_intel(domain_name, ip)
+    except:
+        osint = {}
 
     shap_file = None
     if xai_explainer and "model_input_df" in model_res:
-        try: shap_file = xai_explainer.generate_shap_waterfall(model_res["model_input_df"], domain_name)
+        try:
+            shap_file = xai_explainer.generate_shap_waterfall(model_res["model_input_df"], domain_name)
         except: pass
 
-    try: risk_score_num = float(model_res.get('risk_skoru_yuzde', '0').replace('%', ''))
-    except: risk_score_num = 0.0
+    try:
+        risk_score_num = float(model_res.get('risk_skoru_yuzde', '0').replace('%', ''))
+    except:
+        risk_score_num = 0.0
     
-    prompt = f"You are a SOC analyst. Analyze this domain security data:\nTARGET: {domain_name}\nVirusTotal: {vt.get('malicious', 0)} vendors flagged\nAbuseIPDB Confidence: {abuse.get('abuseConfidenceScore', 'N/A')}%\nML Risk Score: {model_res.get('risk_skoru_yuzde')}\nIP: {ip}\nWrite 3-4 sentences explaining verdict, evidence, and recommended action."
+    prompt = f"""You are a SOC analyst. Analyze this domain security data:
+
+TARGET: {domain_name}
+
+THREAT INTELLIGENCE:
+- VirusTotal: {vt.get('malicious', 0)}/{sum(vt.values()) if vt and 'hata' not in vt else 0} vendors flagged
+- AbuseIPDB Confidence: {abuse.get('abuseConfidenceScore', 'N/A')}%
+- ML Risk Score: {model_res.get('risk_skoru_yuzde')}
+- IP: {ip} ({model_res.get('tespit_edilen_ulke', 'Unknown')})
+
+TASK: Write 3-4 sentences explaining verdict, evidence, and recommended action."""
 
     ai_summary = None
     gemini_failed = False
     
+    logger.info(f"🤖 Gemini durumu: {'Aktif' if gemini_model else 'İnaktif'}")
+    
     if gemini_model:
         for attempt in range(3):
             try:
+                logger.info(f"   Gemini çağrısı deneme {attempt + 1}/3...")
                 response = gemini_model.generate_content(prompt)
+                
                 if hasattr(response, 'text') and response.text:
                     ai_summary = response.text
+                    logger.info(f"   ✅ Gemini başarılı")
                     break
+                    
             except Exception as e:
-                if attempt == 2: gemini_failed = True
-                time.sleep(1)
+                logger.warning(f"   ⚠️ Hata: {e}")
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+                gemini_failed = True
+                break
+        
+        if ai_summary is None:
+            gemini_failed = True
     else:
         gemini_failed = True
     
     if gemini_failed or ai_summary is None:
+        logger.info("   🔄 Fallback kullanılıyor...")
         ai_summary = generate_fallback_summary(domain_name, vt, abuse, model_res)
     
-    pdf_text = ai_summary.get("xai_output", "Analysis Unavailable") if isinstance(ai_summary, dict) else str(ai_summary)
+    pdf_text = ""
+    if isinstance(ai_summary, dict):
+        pdf_text = ai_summary.get("xai_output", "Analysis Unavailable")
+    else:
+        pdf_text = str(ai_summary)
     
     pdf_path = create_pdf_report(
-        domain=domain_name, ai_summary=pdf_text, risk_score=risk_score_num,
-        vt_stats=vt, abuse_data=abuse, osint_data=osint, shap_path=shap_file
+        domain=domain_name,
+        ai_summary=pdf_text,
+        risk_score=risk_score_num,
+        vt_stats=vt,
+        abuse_data=abuse,
+        osint_data=osint,
+        shap_path=shap_file
     )
 
     response = {
         "domain": domain_name,
         "ai_ozeti": ai_summary,
         "ham_veriler": {
-            "virustotal": vt, "abuseipdb": abuse,
-            "kendi_modelimiz": model_res, "osint": osint
+            "virustotal": vt,
+            "abuseipdb": abuse,
+            "kendi_modelimiz": model_res,
+            "osint": osint
         },
         "memory_insights": mem,
         "campaign_alert": camp,
@@ -399,12 +517,16 @@ def enrich_and_summarize_domain(domain_name: str):
     if "model_input_df" in response["ham_veriler"]["kendi_modelimiz"]:
         del response["ham_veriler"]["kendi_modelimiz"]["model_input_df"]
     
-    # Belleğe kaydet
     memory_engine.store_analysis(domain_name, response)
     
-    # ----------------===============================================----------------
-    # FIX: STRING OLARAK UNUTULAN INTEGRATION AKTİF EDİLDİ (FEATURE 2)
-    # ----------------===============================================----------------
+    # ---------------------------------------------------------------
+    # FEATURE 2: IOC Pivot Zinciri
+    # IP tespit edildiyse pivot analizi arka planda başlat
+    # ---------------------------------------------------------------
+    
+    ip = response["ham_veriler"]["kendi_modelimiz"].get("tespit_edilen_ip")
+    
+    # risk_score_num zaten hesaplanmış, ip de var — pivot çalıştır
     if ip and ip != "N/A":
         try:
             pivot_result = pivot_engine.run_pivot(
@@ -412,21 +534,45 @@ def enrich_and_summarize_domain(domain_name: str):
                 ip_address=ip,
                 trigger_risk_score=risk_score_num
             )
+            
+            # Pivot sonucunu ana response'a ekle
             response["pivot_chain"] = {
                 "triggered": pivot_result["pivot_triggered"],
                 "ip_address": pivot_result["ip_address"],
                 "total_related": pivot_result["total_related"],
                 "auto_analyzed_count": len(pivot_result["auto_analyzed"])
             }
+            
+            # Slack'e pivot bildirimini ayrıca gönder (ilişkili domain varsa)
             if pivot_result["pivot_triggered"] and pivot_result["slack_message"]:
+                logger.info(f"[PIVOT] Slack bildirimi gönderiliyor...")
+                # Slack webhook veya bot üzerinden gönder
                 _send_pivot_to_slack(pivot_result["slack_message"])
+                
         except Exception as e:
-            logger.error(f"[PIVOT] Arka plan pivot analizi hatası: {e}")
+            logger.error(f"[PIVOT] Pivot analizi başlatılamadı: {e}")
             response["pivot_chain"] = {"triggered": False, "error": str(e)}
     else:
-        response["pivot_chain"] = {"triggered": False, "reason": "IP adresi co-host analizi için yetersiz."}
+        response["pivot_chain"] = {"triggered": False, "reason": "IP tespit edilemedi"}
+    # ---------------------------------------------------------------
 
-    logger.info(f"✅ Analiz tamamlandı ({response['processing_time']}s)")
+    # ---------------------------------------------------------------
+    # FEATURE 5: MITRE ATT&CK TAKSONOMİK EŞLEŞTİRME
+    # ---------------------------------------------------------------
+    try:
+        mitre_result = mitre_mapper.map(response)
+        response["mitre_attack"] = mitre_result
+        logger.info(
+            f"[MITRE] {len(mitre_result['techniques'])} teknik eşleşti: "
+            f"{[t['technique_id'] for t in mitre_result['techniques']]}"
+        )
+    except Exception as e:
+        logger.error(f"[MITRE] Eşleştirme hatası: {e}")
+        response["mitre_attack"] = {"techniques": [], "total_triggered": 0}
+    # ---------------------------------------------------------------
+
+    logger.info(f"✅ Analiz tamamlandı ({response['processing_time']}s) - AI: {response['ai_provider']}")
+    
     return response
 
 
@@ -439,50 +585,218 @@ def get_stats():
     return {"status": "success", "data": memory_engine.get_statistics()}
 
 def _send_pivot_to_slack(message: str):
+    """Pivot zinciri bildirimini Slack'e gönderir."""
     slack_webhook = os.getenv("SLACK_WEBHOOK_URL")
     if slack_webhook:
-        try: requests.post(slack_webhook, json={"text": message}, timeout=5)
-        except Exception as e: logger.warning(f"[PIVOT] Slack Webhook hatası: {e}")
+        try:
+            requests.post(
+                slack_webhook,
+                json={"text": message},
+                timeout=5
+            )
+        except Exception as e:
+            logger.warning(f"[PIVOT] Slack webhook hatası: {e}")
     else:
-        logger.info("[PIVOT] Webhook tanımlı değil, loglara yazıldı.")
-
-# FIX: Context Manager kullanılarak güvenli hale getirilmiş Manuel Pivot Endpoint'i
+        # Webhook yoksa slack_bot.py üzerinden gönderilir
+        # (slack_bot.py'deki pivot_result handling devreye girer)
+        logger.info("[PIVOT] Slack webhook bulunamadı, bot üzerinden iletilecek")
+ 
+ 
 @app.get("/pivot/{domain_name}")
 def get_pivot_chain(domain_name: str):
-    logger.info(f"[PIVOT] Manuel istek: {domain_name}")
-    ip = None
-    risk_score = 0.0
-
-    with sqlite3.connect("chatsecops_memory.db") as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT ip_address, risk_score FROM domain_analysis WHERE domain = ? ORDER BY timestamp DESC LIMIT 1", (domain_name,))
-        row = cursor.fetchone()
-        if row:
-            ip, risk_score = row[0], row[1]
-
+    """
+    Belirli bir domain için pivot zincirini manuel çalıştır.
+    
+    Örnek: GET /pivot/example.com
+    
+    Bu endpoint:
+    - Domain'in IP'sini DB'den veya canlı çözerek alır
+    - Pivot zincirini çalıştırır
+    - Tüm ilişkili domainleri döndürür
+    """
+    logger.info(f"[PIVOT] Manuel pivot isteği: {domain_name}")
+    
+    # Önce DB'den son bilinen IP'yi al
+    conn = sqlite3.connect("chatsecops_memory.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT ip_address FROM domain_analysis WHERE domain = ? ORDER BY timestamp DESC LIMIT 1",
+        (domain_name,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+    
+    ip = row[0] if row else None
+    
+    # DB'de yoksa canlı çöz
     if not ip or ip == "N/A":
         ip = get_ip_from_domain(domain_name)
     
     if not ip:
-        raise HTTPException(status_code=404, detail="IP adresi çözülemedi.")
+        raise HTTPException(
+            status_code=404,
+            detail=f"{domain_name} için IP adresi tespit edilemedi."
+        )
+    
+    # Risk skoru
+    risk_score = 0.0
+    if row:
+        conn = sqlite3.connect("chatsecops_memory.db")
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT risk_score FROM domain_analysis WHERE domain = ? ORDER BY timestamp DESC LIMIT 1",
+            (domain_name,)
+        )
+        r = cursor.fetchone()
+        conn.close()
+        risk_score = r[0] if r else 0.0
     
     pivot_result = pivot_engine.run_pivot(
-        trigger_domain=domain_name, ip_address=ip, trigger_risk_score=risk_score
+        trigger_domain=domain_name,
+        ip_address=ip,
+        trigger_risk_score=risk_score
     )
-    return {"domain": domain_name, "ip_address": ip, "pivot_result": pivot_result}
+    
+    return {
+        "domain": domain_name,
+        "ip_address": ip,
+        "pivot_result": pivot_result
+    }
 
-# --- FEATURE 4: DOĞAL DİL SORGU ARA YÜZÜ ---
+
+# ============================================================================
+# FEATURE 1: PHISHING URL ANALİZİ
+# ============================================================================
+
+@app.get("/analyze-url")
+def analyze_url(url: str):
+    """
+    Tam URL'yi analiz eder. Domain analizi + URL yapısal analizi birleştirir.
+    
+    Örnek: GET /analyze-url?url=hxxps://paypal-security.tk/login?redirect=paypal.com
+    
+    Döndürür:
+    - Mevcut domain analizi (ML, VirusTotal, AbuseIPDB, OSINT)
+    - URL yapısal analizi (path, query, subdomain, brand impersonation)
+    - Kombine final skor
+    """
+    logger.info(f"[URL ANALIZ] Gelen URL: {url}")
+ 
+    # 1. URL'yi parçala
+    url_analysis = url_parser.analyze(url)
+    extracted_domain = url_analysis["extracted_domain"]
+    
+    logger.info(f"[URL ANALIZ] Çıkarılan domain: {extracted_domain}")
+    
+    if not extracted_domain:
+        raise HTTPException(status_code=400, detail="URL'den domain çıkarılamadı.")
+    
+    # 2. Mevcut domain analiz pipeline'ını çalıştır
+    # (enrich_and_summarize_domain fonksiyonunu direkt çağırıyoruz)
+    domain_result = enrich_and_summarize_domain(extracted_domain)
+    
+    # 3. ML skoru al
+    try:
+        ml_score = float(
+            domain_result["ham_veriler"]["kendi_modelimiz"]
+            .get("risk_skoru_yuzde", "0").replace("%", "")
+        )
+    except:
+        ml_score = 0.0
+    
+    # 4. URL boost'unu ekle
+    url_boost = url_analysis["url_risk_boost"]
+    combined_score = min(100.0, ml_score + url_boost)
+    
+    # 5. Kombine verdict — URL Risk Level de hesaba katılır
+    url_risk_level = url_analysis["risk_level"]
+
+    if url_risk_level == "CRITICAL" or combined_score >= 80:
+        combined_verdict = "CRITICAL"
+    elif url_risk_level == "HIGH" or combined_score >= 60:
+        combined_verdict = "MALICIOUS"
+    elif url_risk_level == "MEDIUM" or combined_score >= 40:
+        combined_verdict = "SUSPICIOUS"
+    else:
+        combined_verdict = "SAFE"
+    
+    # 6. Gemini ile URL bulgularını da dahil et
+    if gemini_model and url_analysis["findings"]:
+        url_prompt = f"""Sen bir SOC analistisin. Şu URL analiz bulgularını 2 cümleyle özetle:
+ 
+URL: {url}
+Domain Risk Skoru: {ml_score:.1f}%
+URL Yapısal Risk Puanı: +{url_boost}
+Kombine Final Skor: {combined_score:.1f}%
+Bulgular:
+{chr(10).join(url_analysis["findings"])}
+ 
+Türkçe, kısa (2-3 cümle) ve profesyonel bir özet yaz."""
+        
+        try:
+            url_ai_summary = gemini_model.generate_content(url_prompt).text
+        except:
+            url_ai_summary = url_analysis["summary"]
+    else:
+        url_ai_summary = url_analysis["summary"]
+    
+    # 7. Sonucu döndür
+    # Domain sonucuna URL analizini ekle
+    domain_result["url_analysis"] = {
+        "original_url":       url,
+        "normalized_url":     url_analysis["normalized_url"],
+        "extracted_domain":   extracted_domain,
+        "components":         url_analysis["components"],
+        "url_risk_boost":     url_boost,
+        "url_risk_level":     url_analysis["risk_level"],
+        "findings":           url_analysis["findings"],
+        "url_summary":        url_ai_summary,
+    }
+    domain_result["combined_score"]   = f"{combined_score:.1f}%"
+    domain_result["combined_verdict"] = combined_verdict
+    domain_result["analysis_type"]    = "full_url"
+
+    # MITRE'yi URL bulguları eklendikten sonra yeniden çalıştır
+    # (ilk çalışma enrich_and_summarize_domain içinde url_analysis görmeden yapıldı)
+    try:
+        mitre_result = mitre_mapper.map(domain_result)
+        domain_result["mitre_attack"] = mitre_result
+        logger.info(
+            f"[MITRE/URL] {len(mitre_result['techniques'])} teknik eşleşti: "
+            f"{[t['technique_id'] for t in mitre_result['techniques']]}"
+        )
+    except Exception as e:
+        logger.error(f"[MITRE/URL] Hata: {e}")
+
+    logger.info(
+        f"[URL ANALIZ] Tamamlandı: ML={ml_score:.1f}% + URL={url_boost} = {combined_score:.1f}% ({combined_verdict})"
+    )
+
+    return domain_result
+
+# ============================================================================
+# FEATURE 4 : DOĞAL DİL SORGU ARAYÜZÜ 
+# ============================================================================
+ 
 @app.get("/agent/ask")
 def ask_ai_agent(query: str):
-    logger.info(f"🤖 AGENT: {query}")
+    """
+    Doğal dil sorusunu SQL\'e çevirip veritabanında çalıştırır.
+    Örnek: GET /agent/ask?query=Son 7 günde kaç zararlı domain var?
+    """
+    logger.info(f"🤖 AGENT SORGUSU: {query}")
+    
     if not query or not query.strip():
         raise HTTPException(status_code=400, detail="Soru boş olamaz.")
     
     result = nl_query_engine.ask(query.strip())
+    
     return {
         "question": query,
         "answer": result["answer"],
-        "sql_generated": result["sql"],
+        "sql_generated": result["sql"],       # Debug için
         "row_count": result["row_count"],
         "success": result["success"]
     }
+
+ 

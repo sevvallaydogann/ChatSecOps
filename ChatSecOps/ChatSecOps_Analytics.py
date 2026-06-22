@@ -3,10 +3,8 @@ ChatSecOps_Analytics.py - ENGLISH VERSION
 All Turkish text replaced with English for international publication
 """
 import os
-import matplotlib
 import matplotlib.pyplot as plt
 from fpdf import FPDF
-matplotlib.use('Agg')
 from datetime import datetime
 import re
 
@@ -60,7 +58,6 @@ class ProfessionalReport(FPDF):
 
 def generate_minimal_charts(risk_score):
     """Generate risk bar chart"""
-    fig = plt.figure()
     if not os.path.exists("static/charts"): os.makedirs("static/charts", exist_ok=True)
     
     plt.figure(figsize=(8, 1.5))
@@ -80,8 +77,8 @@ def generate_minimal_charts(risk_score):
     
     filename = "static/charts/risk_bar_modern.png"
     plt.tight_layout()
-    fig.savefig(filename, dpi=150, bbox_inches='tight')
-    plt.close(fig)
+    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    plt.close()
     return filename
 
 def create_pdf_report(domain, ai_summary, risk_score, vt_stats, abuse_data=None, osint_data=None, shap_path=None):
