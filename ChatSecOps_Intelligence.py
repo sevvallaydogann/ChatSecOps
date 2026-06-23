@@ -7,7 +7,7 @@ import requests
 import os
 from datetime import datetime
 
-# Shodan'ı içe aktarmayı dene
+# Try to import Shodan
 try:
     import shodan
 except ImportError:
@@ -18,23 +18,23 @@ class IntelligenceEngine:
         self.otx_key = os.getenv("ALIENVAULT_API_KEY")
         self.shodan_key = os.getenv("SHODAN_API_KEY")
         
-        # Klasik Feedler
+        # Classic Feeds
         self.feeds = {
             "urlhaus": "https://urlhaus-api.abuse.ch/v1/",
             "threatfox": "https://threatfox-api.abuse.ch/api/v1/",
         }
 
-        # Shodan Bağlantısı
+        # Shodan 
         if self.shodan_key and shodan:
             try:
                 self.shodan_api = shodan.Shodan(self.shodan_key)
-                print("✅ [INTEL] Shodan Hazır.")
+                print("✅ [INTEL] Shodan Ready.")
             except:
                 self.shodan_api = None
         else:
             self.shodan_api = None
 
-    # --- ESKİ MODÜLLER (URLHaus & ThreatFox) ---
+    # URLHaus & ThreatFox
     def check_urlhaus(self, domain: str):
         try:
             response = requests.post(f"{self.feeds['urlhaus']}host/", data={"host": domain}, timeout=5)
@@ -57,7 +57,7 @@ class IntelligenceEngine:
         except:
             return {"error": "Connection failed"}
 
-    # --- ALIENVAULT (DÜZELTİLDİ: DIRECT API) ---
+    # ALIENVAULT 
     def check_alienvault(self, domain):
         """AlienVault OTX - Direct API Call (No Library Dependency)"""
         if not self.otx_key: 
@@ -83,9 +83,9 @@ class IntelligenceEngine:
         except Exception as e:
             return {"error": str(e)}
 
-    # --- SHODAN ---
+    # SHODAN 
     def check_shodan(self, ip_address):
-        """Shodan IP Taraması"""
+        """Shodan IP Scan"""
         if not ip_address: return {"error": "No IP Provided"}
         if not self.shodan_api: return {"error": "API Key Missing"}
 
@@ -99,17 +99,16 @@ class IntelligenceEngine:
                 "vulns": list(host.get('vulns', [])),
             }
         except Exception as e:
-            # Shodan bazen 'No information available for that IP' hatası döner
             return {"error": "IP not found in Shodan DB"}
 
     def get_full_intel(self, domain, ip_address=None):
-        """Tüm istihbaratı topla"""
+        """Collect all intelligence"""
         return {
             "urlhaus": self.check_urlhaus(domain),
             "threatfox": self.check_threatfox(domain),
             "alienvault": self.check_alienvault(domain),
             "shodan": self.check_shodan(ip_address) if ip_address else None,
-            "threats_detected": False, # Basitleştirildi
+            "threats_detected": False, 
             "checked_at": datetime.now().isoformat()
         }
     

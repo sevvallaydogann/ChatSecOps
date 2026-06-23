@@ -1,5 +1,5 @@
 """
-ChatSecOps_Agent.py  —  AI Agent (Feature 6)
+ChatSecOps_Agent.py  —  AI Agent 
 =============================================
 Architecture: ReAct loop via Gemini Function Calling.
 Fallback chain: Gemini 2.0 Flash → Groq Llama-3 → Local rule-based engine.
@@ -19,7 +19,7 @@ from typing import Any
 from google import genai
 from google.genai import types as genai_types
 
-# ── Local modules ────────────────────────────────────────────────────────────
+# Local modules 
 from ChatSecOps_Intelligence import intel_engine
 from ChatSecOps_URLParser import url_parser
 from ChatSecOps_MITRE import mitre_mapper
@@ -29,13 +29,11 @@ from ChatSecOps_Analytics import create_pdf_report
 
 logger = logging.getLogger(__name__)
 
-# ── Singletons ────────────────────────────────────────────────────────────────
+# Singletons 
 memory_engine = ThreatMemoryEngine()
 
-# =============================================================================
 # 1.  TOOL IMPLEMENTATIONS
 #     Each function is called by the agent when it decides to use that tool.
-# =============================================================================
 
 def tool_check_virustotal(domain: str) -> dict:
     """Query VirusTotal for malicious/suspicious vote counts."""
@@ -147,10 +145,8 @@ def tool_generate_pdf(
         return {"error": str(e), "success": False}
 
 
-# =============================================================================
 # 2.  TOOL REGISTRY
 #     Maps Gemini FunctionDeclaration names → Python callables.
-# =============================================================================
 
 TOOL_CALLABLES = {
     "check_virustotal": tool_check_virustotal,
@@ -254,9 +250,8 @@ GEMINI_TOOLS = genai_types.Tool(function_declarations=[
     ),
 ])
 
-# =============================================================================
+
 # 3.  SYSTEM PROMPT
-# =============================================================================
 
 SYSTEM_PROMPT = """
 You are the ChatSecOps Autonomous Cyber Security Threat Intelligence Agent.
@@ -307,9 +302,8 @@ Rules:
 *📄 PDF Report:* `<path or 'not generated'>`
 """.strip()
 
-# =============================================================================
+
 # 4.  GEMINI AGENT  (Function Calling ReAct loop)
-# =============================================================================
 
 def run_gemini_agent(target: str, max_turns: int = 10) -> str:
     """
@@ -396,9 +390,7 @@ def run_gemini_agent(target: str, max_turns: int = 10) -> str:
         return "Agent reached max turns without a final answer."
 
 
-# =============================================================================
 # 5.  GROQ FALLBACK  (simple ReAct via text, no native function calling)
-# =============================================================================
 
 def run_groq_fallback(target: str) -> str:
     """
@@ -463,9 +455,7 @@ Now write the final Slack investigation report for target: {target}
     raise RuntimeError(f"Groq HTTP {r.status_code}: {r.text[:200]}")
 
 
-# =============================================================================
 # 6.  LOCAL FALLBACK  (zero-LLM rule-based report)
-# =============================================================================
 
 def run_local_fallback(target: str) -> str:
     """Rule-based fallback when all LLM providers are unavailable."""
@@ -505,9 +495,8 @@ def run_local_fallback(target: str) -> str:
     return "\n".join(lines)
 
 
-# =============================================================================
+
 # 7.  PUBLIC ENTRY POINT
-# =============================================================================
 
 def _validate_keys() -> dict:
     """
@@ -583,9 +572,7 @@ def investigate(target: str) -> str:
     return result
 
 
-# =============================================================================
 # 8.  SINGLETON  (imported by slack_bot.py and main.py)
-# =============================================================================
 
 # Usage:
 #   from ChatSecOps_Agent import investigate

@@ -1,5 +1,5 @@
 """
-ChatSecOps_NLQuery.py - Natural Language Query Engine (Feature 4)
+ChatSecOps_NLQuery.py - Natural Language Query Engine 
 =========================================================
 Translates the natural language question written by the user on Slack:
   1. Converts to SQL using Gemini
@@ -24,10 +24,10 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
+
 # REAL DATABASE SCHEMA
 # This information is given to Gemini — tables and columns must be correct.
-# =============================================================================
+
 
 DB_SCHEMA = """
 You are the SOC Assistant of ChatSecOps. Below is the real schema of the database.
@@ -104,10 +104,10 @@ SQL: SELECT ip_address, domain_count, threat_level FROM ip_clusters WHERE threat
 - Use only the tables specified above.
 """
 
-# =============================================================================
+
 # SAFE SQL VALIDATOR
 # Gemini sometimes generates UPDATE or DROP — we prevent this.
-# =============================================================================
+
 
 FORBIDDEN_KEYWORDS = [
     "INSERT", "UPDATE", "DELETE", "DROP", "ALTER",
@@ -131,9 +131,9 @@ def is_safe_sql(sql: str) -> bool:
     return True
 
 
-# =============================================================================
+
 # QUERY ENGINE
-# =============================================================================
+
 
 class NLQueryEngine:
     """
@@ -155,7 +155,7 @@ class NLQueryEngine:
             
             genai.configure(api_key=api_key)
             
-            # FIX: The most up-to-date and working stable model is added at the top
+            # The most up-to-date and working stable model is added at the top
             model_candidates = [
                 "models/gemini-2.5-flash",
                 "models/gemini-2.5-flash-preview-05-20",
@@ -339,7 +339,7 @@ Write a short, polite, English error message to the user. Do not provide SQL det
             "success": True
         }
 
-# =============================================================================
+
 # SINGLETON
-# =============================================================================
+
 nl_query_engine = NLQueryEngine()

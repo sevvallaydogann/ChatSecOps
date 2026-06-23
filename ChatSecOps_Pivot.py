@@ -1,5 +1,5 @@
 """
-ChatSecOps_Pivot.py - IOC Chain Tracking (Feature 2)
+ChatSecOps_Pivot.py - IOC Chain Tracking 
 =====================================================
 When a domain is analyzed, it detects other domains sharing
 the same IP and automatically queues them for analysis.
@@ -51,9 +51,9 @@ class PivotEngine:
         self.shodan_key = os.getenv("SHODAN_API_KEY")
         self.backend_api = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 
-    # =========================================================================
+    
     # SOURCE 1: OUR OWN DATABASE
-    # =========================================================================
+   
 
     def get_cohosted_from_db(self, ip_address: str, exclude_domain: str) -> List[Dict]:
         """
@@ -100,9 +100,9 @@ class PivotEngine:
             logger.error(f"[PIVOT] DB query error: {e}")
             return []
 
-    # =========================================================================
+    
     # SOURCE 2: SHODAN - FETCH HOSTNAMES ON THE SAME IP
-    # =========================================================================
+    
 
     def get_cohosted_from_shodan(self, ip_address: str, exclude_domain: str) -> List[Dict]:
         """
@@ -157,9 +157,9 @@ class PivotEngine:
             logger.error(f"[PIVOT] Shodan error: {e}")
             return []
 
-    # =========================================================================
+    
     # MAIN FUNCTION: RUN PIVOT ANALYSIS
-    # =========================================================================
+    
 
     def run_pivot(
         self,
@@ -298,9 +298,9 @@ class PivotEngine:
             "slack_message": slack_message
         }
 
-    # =========================================================================
+    
     # BUILD SLACK MESSAGE
-    # =========================================================================
+    
 
     def _build_slack_message(
         self,
@@ -360,7 +360,7 @@ class PivotEngine:
         return "\n".join(lines)
 
 
-# =============================================================================
+
 # SINGLETON
-# =============================================================================
+
 pivot_engine = PivotEngine()

@@ -1,5 +1,5 @@
 """
-ChatSecOps_MITRE.py — MITRE ATT&CK Taxonomic Mapping Engine (Feature 5)
+ChatSecOps_MITRE.py — MITRE ATT&CK Taxonomic Mapping Engine 
 =========================================================================
 
 Input signals:
@@ -29,9 +29,9 @@ from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
+
 # ATT&CK TECHNIQUE CATALOG
-# =============================================================================
+
 
 TECHNIQUE_CATALOG = {
     "T1566.002": {
@@ -87,9 +87,9 @@ KNOWN_C2_PORTS = {
 }
 
 
-# =============================================================================
+
 # MAPPING ENGINE
-# =============================================================================
+
 
 class MITREMapper:
     """
@@ -136,10 +136,10 @@ class MITREMapper:
 
         vt_malicious = vt_data.get("malicious", 0) if isinstance(vt_data, dict) else 0
 
-        # ------------------------------------------------------------------
+        
         # T1566.002 — Spearphishing Link
         # Trigger: URL engine brand impersonation, /login path, open redirect
-        # ------------------------------------------------------------------
+        
         url_findings = url_analysis.get("findings", [])
         url_risk_level = url_analysis.get("url_risk_level", "LOW")
 
@@ -164,10 +164,10 @@ class MITREMapper:
                 reasons=spear_reasons
             ))
 
-        # ------------------------------------------------------------------
+        
         # T1568.002 — Domain Generation Algorithms (DGA)
         # Trigger: High Entropy in SHAP + character distribution anomaly
-        # ------------------------------------------------------------------
+       
         dga_reasons = []
 
         # Is Entropy highly ranked in the SHAP feature list?
@@ -196,10 +196,10 @@ class MITREMapper:
                 reasons=dga_reasons
             ))
 
-        # ------------------------------------------------------------------
+        
         # T1071.001 — Web Protocols C2
         # Trigger: HTTP/C2 ports in Shodan or shared infrastructure in Pivot
-        # ------------------------------------------------------------------
+        
         c2_reasons = []
 
         # HTTP (unencrypted) transport
@@ -230,10 +230,10 @@ class MITREMapper:
                 reasons=c2_reasons
             ))
 
-        # ------------------------------------------------------------------
+       
         # T1583.001 — Acquire Infrastructure: Domains
         # Trigger: CreationDate highly ranked in SHAP + new registration
-        # ------------------------------------------------------------------
+        
         infra_reasons = []
 
         if self._feature_in_top(top_features, "creationdate", xai_summary):
@@ -258,11 +258,11 @@ class MITREMapper:
                 reasons=infra_reasons
             ))
 
-        # ------------------------------------------------------------------
+        
         # T1598.003 — Phishing for Information: Spearphishing Link
         # Trigger: Credential harvesting pattern (login + redirect + brand)
         # Activation condition: If T1566.002 is already triggered AND there is a redirect
-        # ------------------------------------------------------------------
+        
         already_spear = any(t["technique_id"] == "T1566.002" for t in triggered)
         has_redirect = any("redirect" in f.lower() for f in url_findings)
         missing_spf = self._feature_in_top(top_features, "hasspfinfo", xai_summary)
@@ -279,10 +279,10 @@ class MITREMapper:
                 reasons=reasons
             ))
 
-        # ------------------------------------------------------------------
+        
         # T1190 — Exploit Public-Facing Application
         # Trigger: CVE in Shodan + high risk
-        # ------------------------------------------------------------------
+        
         if vulns and risk_score >= 60:
             triggered.append(self._build(
                 tech_id="T1190",
@@ -293,9 +293,9 @@ class MITREMapper:
                 ]
             ))
 
-        # ------------------------------------------------------------------
+        
         # Result
-        # ------------------------------------------------------------------
+        
         tactic_summary = self._build_summary(triggered, domain)
 
         highest_tactic = self._get_highest_tactic(triggered)
@@ -309,9 +309,9 @@ class MITREMapper:
             "highest_tactic": highest_tactic
         }
 
-    # =========================================================================
+   
     # HELPER FUNCTIONS
-    # =========================================================================
+    
 
     def _parse_risk(self, risk_str: str) -> float:
         try:
@@ -466,7 +466,6 @@ class MITREMapper:
         return blocks
 
 
-# =============================================================================
 # SINGLETON
-# =============================================================================
+
 mitre_mapper = MITREMapper()

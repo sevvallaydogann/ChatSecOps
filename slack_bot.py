@@ -20,17 +20,16 @@ from ChatSecOps_NLQuery import nl_query_engine
 from ChatSecOps_MITRE import mitre_mapper
 from ChatSecOps_Agent import investigate as agent_investigate
 
-# ── Bootstrap ─────────────────────────────────────────────────────────────────
+# Bootstrap
 load_dotenv()
 
 app = App(token=os.getenv("SLACK_BOT_TOKEN"))
 BACKEND_API = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 
 
-# =============================================================================
 # HELPER: MESSAGE FORMATTER
 # Converts the raw API JSON into Slack Block Kit cards.
-# =============================================================================
+
 
 def format_risk_message(data: dict) -> dict:
     domain = data.get("domain", "Unknown")
@@ -105,7 +104,7 @@ def format_risk_message(data: dict) -> dict:
     else:
         sho_status = "⚪ No IP Resolved" if (not detected_ip or detected_ip == "N/A") else "⚪ Not Found"
 
-    # --- Build blocks ---
+    # Build blocks 
     blocks = [
         {
             "type": "header",
@@ -176,9 +175,9 @@ def format_risk_message(data: dict) -> dict:
     }
 
 
-# =============================================================================
+
 # COMMAND HANDLERS
-# =============================================================================
+
 
 @app.message(re.compile(r"^help$", re.IGNORECASE))
 def help_command(message, say):
@@ -244,9 +243,9 @@ def statistics_command(message, say):
         say("❌ Stats error.")
 
 
-# =============================================================================
+
 # ANALYZE — Feature 1 + Feature 6 (AI Agent)
-# =============================================================================
+
 
 @app.message(re.compile(r"^(analyze|check|scan)\s+(.*)", re.IGNORECASE))
 def analyze_domain(message, say):
@@ -257,14 +256,14 @@ def analyze_domain(message, say):
         say("❌ *Error:* Please specify a domain or URL.\nExample: `analyze evil.tk`")
         return
 
-    # ── Clean the raw input ───────────────────────────────────────────────────
+    # Clean the raw input
     raw_input = match.group(2).strip()
     # Slack auto-formats URLs as <https://example.com|example.com> — unwrap
     raw_input = re.sub(r"<https?://[^|>]+\|([^>]+)>", r"\1", raw_input)
     raw_input = re.sub(r"<https?://([^>]+)>", r"\1", raw_input)
     raw_input = raw_input.replace("<", "").replace(">", "").strip()
 
-    # ── Determine target for the agent ───────────────────────────────────────
+    # Determine target for the agent
     # Defanged URL normalisation (hxxps → https, [.] → .)
     normalised = raw_input.lower().replace("[.]", ".").replace("hxxp://", "http://").replace("hxxps://", "https://")
 
@@ -279,7 +278,7 @@ def analyze_domain(message, say):
 
     agent_target = normalised if is_full_url else raw_input
 
-    # ── Step 1: AI Agent (Feature 6) ─────────────────────────────────────────
+    # Step 1: AI Agent 
     say(f"🤖 *ChatSecOps AI Agent* is investigating `{raw_input}`...\n_Selecting tools and building evidence chain..._")
 
     try:
@@ -288,7 +287,7 @@ def analyze_domain(message, say):
     except Exception as e:
         say(f"⚠️ *Agent error:* `{str(e)}`\nFalling back to standard pipeline...")
 
-    # ── Step 2: Standard pipeline (ML model + PDF + MITRE + Pivot blocks) ────
+    # Step 2: Standard pipeline (ML model + PDF + MITRE + Pivot blocks)
     # The agent gives the AI narrative; the standard API gives structured blocks
     # (risk card, PDF button, SHAP graph, pivot alert, MITRE blocks).
     if is_full_url:
@@ -327,7 +326,7 @@ def analyze_domain(message, say):
     # Structured risk card
     say(**format_risk_message(data))
 
-    # Feature 1: URL structural findings
+    # URL structural findings
     url_analysis = data.get("url_analysis")
     if url_analysis and url_analysis.get("findings"):
         findings_text = "\n".join(f"  • {f}" for f in url_analysis["findings"][:5])
@@ -339,7 +338,7 @@ def analyze_domain(message, say):
             f"*Findings:*\n{findings_text}"
         )
 
-    # Feature 2: Pivot chain notification
+    # Pivot chain notification
     pivot = data.get("pivot_chain", {})
     if pivot.get("triggered") and pivot.get("total_related", 0) > 0:
         say(
@@ -348,7 +347,7 @@ def analyze_domain(message, say):
             f"{pivot.get('auto_analyzed_count', 0)} domain(s) auto-analysed."
         )
 
-    # Feature 5: MITRE ATT&CK blocks
+    # MITRE ATT&CK blocks
     mitre_result = data.get("mitre_attack", {})
     if mitre_result and mitre_result.get("total_triggered", 0) > 0:
         mitre_blocks = mitre_mapper.format_for_slack_block(mitre_result)
@@ -361,9 +360,9 @@ def analyze_domain(message, say):
         say(f"🧠 *Memory:* This domain was analysed {mem['analysis_count']} time(s) before.")
 
 
-# =============================================================================
-# NATURAL LANGUAGE QUERY — Feature 4
-# =============================================================================
+
+# NATURAL LANGUAGE QUERY 
+
 
 @app.message(re.compile(r"^(query|ask|sor)\s+(.*)", re.IGNORECASE))
 def handle_nl_query(message, say):
@@ -410,9 +409,9 @@ def handle_nl_query(message, say):
         say(f"❌ Query error: `{str(e)}`")
 
 
-# =============================================================================
+
 # ACTION HANDLERS (Buttons)
-# =============================================================================
+
 
 @app.action("download_pdf")
 def handle_pdf(ack, body, client):
@@ -436,9 +435,9 @@ def handle_graph(ack, body, client):
         client.chat_postMessage(channel=channel, text="⚠️ Graph file not found on server.")
 
 
-# =============================================================================
+
 # MAIN
-# =============================================================================
+
 
 if __name__ == "__main__":
     print("🚀 ChatSecOps Slack Bot (Hybrid v6.0) is starting...")

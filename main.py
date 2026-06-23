@@ -1,4 +1,4 @@
-# --- 1. IMPORTING REQUIRED LIBRARIES ---
+# IMPORTING REQUIRED LIBRARIES 
 import os
 import json
 import logging
@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from google import genai
 
-# --- CUSTOM MODULES ---
+# CUSTOM MODULES 
 from ChatSecOps_Analytics import create_pdf_report
 from ChatSecOps_Memory import memory_engine, format_memory_insights, format_similar_domains
 from ChatSecOps_Intelligence import intel_engine, enrich_with_osint, format_osint_results
@@ -50,7 +50,7 @@ except ImportError:
     whois = None
     dns = None
 
-# --- DYNAMIC MODEL CONFIGURATION ---
+# DYNAMIC MODEL CONFIGURATION 
 METADATA_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833_metadata.json'
 try:
     with open(METADATA_PATH, 'r', encoding='utf-8') as f:
@@ -65,7 +65,7 @@ except Exception as e:
 if not TOP_30_TLDS:
     TOP_30_TLDS = ['com', 'net', 'online', 'org', 'ru', 'info', 'co.uk']
 
-# --- SETUP ---
+# SETUP
 print("[INFO] SOAR Engine starting...")
 load_dotenv()
 
@@ -86,9 +86,9 @@ try:
 except Exception as e:
     model, scaler = None, None
 
-# ============================================================================
+
 # GEMINI CLIENT (new google.genai SDK)
-# ============================================================================
+
 _gemini_client = None
 try:
     if GEMINI_API_KEY and len(GEMINI_API_KEY) > 10:
@@ -114,9 +114,9 @@ try:
 except:
     ipinfo_handler = None
 
-# =============================================================================
+
 # HELPER FUNCTIONS
-# =============================================================================
+
 def get_virustotal_data(domain: str):
     url = f"https://www.virustotal.com/api/v3/domains/{domain}"
     headers = {"x-apikey": VIRUSTOTAL_API_KEY}
@@ -344,9 +344,9 @@ def generate_fallback_summary(domain: str, vt: dict, abuse: dict, model_res: dic
         "xai_output": " ".join(parts)
     }
 
-# =============================================================================
+
 # MULTI-LLM ROUTER  (Gemini → Groq → OpenAI → local fallback)
-# =============================================================================
+
 def _call_gemini(prompt: str) -> str | None:
     """Call Gemini using the new google.genai SDK."""
     if not _gemini_client:
@@ -430,9 +430,9 @@ def llm_summarize(prompt: str) -> tuple[str | None, bool]:
     logger.info("🔄 [MAIN ROUTER] All external providers exhausted. Using local fallback.")
     return None, True
 
-# =============================================================================
+
 # MAIN ENDPOINT
-# =============================================================================
+
 @app.get("/enrich-and-summarize/domain/{domain_name}")
 def enrich_and_summarize_domain(domain_name: str):
     logger.info(f"ANALYSIS: {domain_name}")
@@ -462,7 +462,7 @@ def enrich_and_summarize_domain(domain_name: str):
     except:
         risk_score_num = 0.0
         
-    # ── LLM summary ──────────────────────────────────────────────────────────
+    # LLM summary 
     prompt = f"""You are a SOC analyst. Analyze this domain security data:
 TARGET: {domain_name}
 THREAT INTELLIGENCE:
@@ -477,7 +477,6 @@ Write a concise 3-sentence summary: verdict, evidence, and recommended action. D
         ai_summary = ai_summary_text
     else:
         ai_summary = generate_fallback_summary(domain_name, vt, abuse, model_res)
-    # ─────────────────────────────────────────────────────────────────────────
     
     pdf_text = ai_summary.get("xai_output", "Analysis Unavailable") if isinstance(ai_summary, dict) else str(ai_summary)
     pdf_path = create_pdf_report(
@@ -512,7 +511,7 @@ Write a concise 3-sentence summary: verdict, evidence, and recommended action. D
         
     memory_engine.store_analysis(domain_name, response)
     
-    # Feature 2: IOC Pivot (LOOP PROTECTED)
+    # IOC Pivot (LOOP PROTECTED)
     ip = response["ham_veriler"]["kendi_modelimiz"].get("tespit_edilen_ip")
     if ip and ip != "N/A":
         try:
@@ -562,7 +561,7 @@ Write a concise 3-sentence summary: verdict, evidence, and recommended action. D
     else:
         response["pivot_chain"] = {"triggered": False, "reason": "IP could not be detected"}
         
-    # Feature 5: MITRE ATT&CK
+    # MITRE ATT&CK
     try:
         mitre_result = mitre_mapper.map(response)
         response["mitre_attack"] = mitre_result
@@ -574,9 +573,9 @@ Write a concise 3-sentence summary: verdict, evidence, and recommended action. D
     logger.info(f"✅ Analysis completed ({response['processing_time']}s) - AI Status: {response['ai_provider']}")
     return response
 
-# =============================================================================
+
 # OTHER ENDPOINTS
-# =============================================================================
+
 @app.get("/")
 def read_root():
     return {"status": "ChatSecOps API is running", "docs_url": "/docs"}
@@ -631,9 +630,9 @@ def get_pivot_chain(domain_name: str):
     )
     return {"domain": domain_name, "ip_address": ip, "pivot_result": pivot_result}
 
-# ============================================================================
-# FEATURE 1: PHISHING URL ANALYSIS
-# ============================================================================
+
+# PHISHING URL ANALYSIS
+
 @app.get("/analyze-url")
 def analyze_url(url: str):
     logger.info(f"[URL] Incoming URL: {url}")
@@ -705,9 +704,9 @@ Findings:
     logger.info(f"[URL] Completed: ML={ml_score:.1f}% + URL={url_boost} = {combined_score:.1f}% ({combined_verdict})")
     return domain_result
 
-# ============================================================================
-# FEATURE 4: NATURAL LANGUAGE QUERY INTERFACE
-# ============================================================================
+
+# NATURAL LANGUAGE QUERY INTERFACE
+
 @app.get("/agent/ask")
 def ask_ai_agent(query: str):
     logger.info(f"🤖 AGENT QUERY: {query}")

@@ -6,11 +6,9 @@ import numpy as np
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
 
-# ============================================================================
-# GLOBAL SETTINGS (ACADEMIC STYLE)
-# ============================================================================
 
-# IEEE/Academic standartlarında font ve stil ayarları
+# SETTINGS 
+
 plt.rcParams.update({
     'font.family': 'serif',
     'font.serif': ['Times New Roman', 'DejaVu Serif'],
@@ -25,7 +23,7 @@ plt.rcParams.update({
     'legend.fontsize': 9,
 })
 
-# Grayscale Palette (Baskı dostu)
+# Grayscale Palette 
 GRAY_DARK = '#333333'
 GRAY_MED = '#666666'
 GRAY_LIGHT = '#E0E0E0'
@@ -33,16 +31,13 @@ GRAY_BG = '#F5F5F5'
 
 def save_figure(filename):
     """Saves figure in both PDF (Vector) and PNG (Raster) formats"""
-    # PDF for LaTeX (Vector graphics - no pixelation)
     plt.savefig(f"{filename}.pdf", format='pdf', bbox_inches='tight')
-    # PNG for quick preview
     plt.savefig(f"{filename}.png", format='png', dpi=300, bbox_inches='tight', facecolor='white')
     print(f"✅ Saved: {filename}.pdf & {filename}.png")
     plt.close()
 
-# ============================================================================
+
 # FIGURE 1: SYSTEM ARCHITECTURE DIAGRAM (WIREFRAME STYLE)
-# ============================================================================
 
 def generate_architecture_diagram():
     fig, ax = plt.subplots(figsize=(12, 9))
@@ -50,7 +45,6 @@ def generate_architecture_diagram():
     ax.set_ylim(0, 10.5)
     ax.axis('off')
     
-    # --- HELPER FOR BOXES ---
     def draw_box(x, y, w, h, label, subtext="", style='solid'):
         box = FancyBboxPatch((x, y), w, h,
                              boxstyle="round,pad=0.1",
@@ -99,7 +93,7 @@ def generate_architecture_diagram():
     # 5. OUTPUT
     draw_box(2.0, 0.5, 6.0, 1.0, "OUTPUT ARTIFACTS", "Forensic PDF Report + Visual Evidence")
 
-    # --- ARROWS (Manhattan style lines for cleaner look) ---
+    # ARROWS 
     arrow_props = dict(arrowstyle='->', lw=1.5, color='black')
     
     # UI -> Orch
@@ -108,10 +102,10 @@ def generate_architecture_diagram():
     ax.annotate('', xy=(5, 6.4), xytext=(5, 7.2), arrowprops=arrow_props)
     
     # Intel -> Engines (Split)
-    ax.plot([5, 5], [5.5, 5.0], color='black', lw=1.5) # Down from Intel
-    ax.plot([2.5, 7.5], [5.0, 5.0], color='black', lw=1.5) # Horizontal split
-    ax.annotate('', xy=(2.5, 4.5), xytext=(2.5, 5.0), arrowprops=arrow_props) # To ML
-    ax.annotate('', xy=(7.5, 4.5), xytext=(7.5, 5.0), arrowprops=arrow_props) # To GenAI
+    ax.plot([5, 5], [5.5, 5.0], color='black', lw=1.5) 
+    ax.plot([2.5, 7.5], [5.0, 5.0], color='black', lw=1.5) 
+    ax.annotate('', xy=(2.5, 4.5), xytext=(2.5, 5.0), arrowprops=arrow_props) 
+    ax.annotate('', xy=(7.5, 4.5), xytext=(7.5, 5.0), arrowprops=arrow_props) 
     
     # Engines -> Output
     ax.annotate('', xy=(4.0, 1.5), xytext=(2.5, 2.5), arrowprops=arrow_props)
@@ -121,9 +115,8 @@ def generate_architecture_diagram():
     save_figure("fig1_architecture")
 
 
-# ============================================================================
+
 # FIGURE 2: CONFUSION MATRIX (GRAYSCALE HEATMAP)
-# ============================================================================
 
 def generate_confusion_matrix():
     """
@@ -162,9 +155,9 @@ def generate_confusion_matrix():
     save_figure("fig2_confusion_matrix")
 
 
-# ============================================================================
+
 # FIGURE 3: SHAP SUMMARY (GRAYSCALE GRADIENT)
-# ============================================================================
+
 
 def generate_shap_summary():
     features = [
@@ -204,9 +197,8 @@ def generate_shap_summary():
     save_figure("fig3_shap_summary")
 
 
-# ============================================================================
 # FIGURE 4: PERFORMANCE COMPARISON (5 MODELS FROM LOGS)
-# ============================================================================
+
 
 def generate_performance_comparison():
     # Logs verileriniz:
@@ -237,7 +229,7 @@ def generate_performance_comparison():
     rects3 = ax.bar(x + 0.5*width, recall, width, label='Recall', 
                     color='white', edgecolor='black', hatch='xxx')
     rects4 = ax.bar(x + 1.5*width, f1_score, width, label='F1-Score', 
-                    color='#cccccc', edgecolor='black') # Solid gray
+                    color='#cccccc', edgecolor='black') 
     
     ax.set_ylabel('Score (%)')
     # Focus on the 98-100 range since all models performed very well
@@ -250,7 +242,6 @@ def generate_performance_comparison():
     
     ax.grid(axis='y', linestyle='--', alpha=0.5, color='gray')
     
-    # Highlight the top contenders
     ax.text(2, 99.85, "Highest Acc\n(99.77%)", ha='center', fontsize=9, weight='bold')
     ax.text(3, 99.85, "Selected\n(99.75%)", ha='center', fontsize=9, weight='bold')
 
@@ -258,9 +249,8 @@ def generate_performance_comparison():
     save_figure("fig4_performance")
 
 
-# ============================================================================
 # FIGURE 5: TRAINING TIME EFFICIENCY (REAL LOG DATA)
-# ============================================================================
+
 
 def generate_efficiency_chart():
     """
@@ -277,30 +267,25 @@ def generate_efficiency_chart():
     
     fig, ax = plt.subplots(figsize=(10, 5))
     
-    # White bars with stripes
     bars = ax.bar(models, times, color='white', edgecolor='black', hatch='//')
     
-    # Highlight LightGBM (Selected Model) with Solid Black
     bars[3].set_color('black')
     bars[3].set_edgecolor('black')
     bars[3].set_hatch('')
     
-    # Highlight Gradient Boosting (Slowest) with Gray
     bars[2].set_color('#cccccc')
     bars[2].set_edgecolor('black')
     
     ax.set_ylabel('Training Time (Seconds) [Log Scale]')
-    ax.set_yscale('log') # Log scale is crucial here due to large difference
+    ax.set_yscale('log') 
     ax.grid(axis='y', linestyle=':', color='gray')
     
-    # Add values on top
     for i, (bar, time) in enumerate(zip(bars, times)):
         height = bar.get_height()
-        color = 'white' if i == 3 else 'black' # Text color adjustment
+        color = 'white' if i == 3 else 'black' 
         ax.text(bar.get_x() + bar.get_width()/2., height * 1.1,
                 f'{time}s', ha='center', va='bottom', fontsize=10, weight='bold', color='black')
 
-    # Add comparison annotation
     ax.annotate('~93x Faster\nthan Gradient Boosting', 
                 xy=(3, 0.69), xytext=(3, 15),
                 arrowprops=dict(facecolor='black', shrink=0.05, width=1.5, headwidth=8),
@@ -311,9 +296,9 @@ def generate_efficiency_chart():
     save_figure("fig5_training_time")
 
 
-# ============================================================================
+
 # FIGURE 6: FEATURE PIPELINE
-# ============================================================================
+
 
 def generate_feature_pipeline():
     fig, ax = plt.subplots(figsize=(12, 6))
@@ -365,9 +350,9 @@ def generate_feature_pipeline():
     plt.title("Figure 6. Feature Engineering Pipeline", y=0.05, fontsize=12, weight='bold')
     save_figure("fig6_pipeline")
 
-# ============================================================================
+
 # MAIN EXECUTION
-# ============================================================================
+
 
 if __name__ == "__main__":
     print("🎨 Generating all figures for ChatSecOps paper (PDF/Grayscale)...")

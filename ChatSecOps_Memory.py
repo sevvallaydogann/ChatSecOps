@@ -32,7 +32,7 @@ class ThreatMemoryEngine:
         cursor.execute("PRAGMA synchronous=NORMAL")  # Performance boost
         cursor.execute("PRAGMA cache_size=10000")     # 10MB cache
         
-        # Main analysis table (UPDATED: INTEGER timestamp)
+        # Main analysis table (INTEGER timestamp)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS domain_analysis (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +53,7 @@ class ThreatMemoryEngine:
             )
         """)
         
-        # === CRITICAL: Add indexes for fast queries ===
+        # Add indexes for fast queries
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_domain 
             ON domain_analysis(domain)
@@ -89,7 +89,7 @@ class ThreatMemoryEngine:
             ON domain_similarity(domain1)
         """)
         
-        # IP clusters (UPDATED)
+        # IP clusters 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS ip_clusters (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,7 +142,7 @@ class ThreatMemoryEngine:
         
         tld = domain.split('.')[-1] if '.' in domain else 'unknown'
         
-        # UPDATED: Use UNIX timestamp (integer)
+        # Use UNIX timestamp (integer)
         timestamp_unix = int(datetime.now().timestamp())
         
         cursor.execute("""
@@ -214,7 +214,7 @@ class ThreatMemoryEngine:
     def _find_similar_domains(self, cursor, domain: str, threshold: float = 0.7) -> List[Dict]:
         """Find similar domains (typosquatting)"""
         
-        # OPTIMIZED: Only check domains from last 90 days
+        # Only check domains from last 90 days
         cutoff_time = int((datetime.now().timestamp() - 90*24*3600))
         
         cursor.execute("""
@@ -274,7 +274,7 @@ class ThreatMemoryEngine:
         if row and row[0] > 0:
             count, avg_risk, first_seen, last_seen, ip_addr = row
             
-            # CRITICAL FIX: Handle both string and integer timestamps
+            # Handle both string and integer timestamps
             def safe_timestamp_convert(ts_value):
                 """Convert timestamp to ISO format, handling both string and int"""
                 if ts_value is None:
@@ -411,7 +411,7 @@ class ThreatMemoryEngine:
 memory_engine = ThreatMemoryEngine()
 
 
-# === Helper functions (keep existing) ===
+# Helper functions (keep existing)
 def format_memory_insights(insights: Dict) -> str:
     """Format memory insights for Slack"""
     if not insights.get("is_known"):

@@ -1,5 +1,5 @@
 """
-ChatSecOps_URLParser.py - Automated Phishing URL Parsing (Feature 1)
+ChatSecOps_URLParser.py - Automated Phishing URL Parsing 
 ======================================================================
 The current ML model only works on the domain.
 This module analyzes the rest of the URL (path, query, subdomain structure)
@@ -19,10 +19,10 @@ from urllib.parse import urlparse, parse_qs, unquote
 from typing import Dict, List, Tuple
 
 
-# =============================================================================
+
 # RULE-BASED RISK RULES
 # Each rule: (points, description)
-# =============================================================================
+
 
 # High-risk keywords found in the Path
 PATH_HIGH_RISK_KEYWORDS = {
@@ -385,7 +385,7 @@ class URLParser:
             return False
 
 
-# =============================================================================
+
 # SINGLETON
-# =============================================================================
+
 url_parser = URLParser()
