@@ -1,4 +1,4 @@
-# --- 1. GEREKLİ KÜTÜPHANELERİ İÇERİ AKTARMA ---
+# --- 1. IMPORTING REQUIRED LIBRARIES ---
 import os
 import json
 import logging
@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from google import genai
 
-# --- ÖZEL MODÜLLER ---
+# --- CUSTOM MODULES ---
 from ChatSecOps_Analytics import create_pdf_report
 from ChatSecOps_Memory import memory_engine, format_memory_insights, format_similar_domains
 from ChatSecOps_Intelligence import intel_engine, enrich_with_osint, format_osint_results
@@ -39,10 +39,10 @@ logger = logging.getLogger(__name__)
 try:
     from xai_explainer import ModelExplainer
 except Exception as e:
-    print(f"❌ [HATA] XAI Explainer: {e}")
+    print(f"❌ [ERROR] XAI Explainer: {e}")
     ModelExplainer = None
 
-# Network Kütüphaneleri
+# Network Libraries
 try:
     import whois
     import dns.resolver
@@ -50,7 +50,7 @@ except ImportError:
     whois = None
     dns = None
 
-# --- DİNAMİK MODEL YAPILANDIRMASI ---
+# --- DYNAMIC MODEL CONFIGURATION ---
 METADATA_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833_metadata.json'
 try:
     with open(METADATA_PATH, 'r', encoding='utf-8') as f:
@@ -59,14 +59,14 @@ try:
     COLUMNS_TO_SCALE = meta['preprocessing']['columns_to_scale']
     TOP_30_TLDS = meta['preprocessing']['top_30_tlds']
 except Exception as e:
-    print(f"❌ [KRİTİK HATA] Metadata yüklenemedi: {e}")
+    print(f"❌ [CRITICAL ERROR] Failed to load metadata: {e}")
     TRAINING_COLUMNS, COLUMNS_TO_SCALE, TOP_30_TLDS = [], [], []
 
 if not TOP_30_TLDS:
     TOP_30_TLDS = ['com', 'net', 'online', 'org', 'ru', 'info', 'co.uk']
 
-# --- KURULUM ---
-print("[BİLGİ] SOAR Motoru başlatılıyor...")
+# --- SETUP ---
+print("[INFO] SOAR Engine starting...")
 load_dotenv()
 
 VIRUSTOTAL_API_KEY = os.getenv("VIRUSTOTAL_API_KEY")
@@ -75,9 +75,9 @@ IPINFO_TOKEN       = os.getenv("IPINFO_TOKEN")
 GEMINI_API_KEY     = os.getenv("GEMINI_API_KEY", "").strip().strip('"').strip("'")
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "").strip().strip('"').strip("'")
 
-app = FastAPI(title="ChatSecOps SOAR Motoru")
+app = FastAPI(title="ChatSecOps SOAR Engine")
 
-# Model yükle
+# Load model
 MODEL_PATH  = 'model_outputs/chatsecops_model_v2_20260114_203833.joblib'
 SCALER_PATH = 'model_outputs/chatsecops_model_v2_20260114_203833_scaler.joblib'
 try:
@@ -87,7 +87,7 @@ except Exception as e:
     model, scaler = None, None
 
 # ============================================================================
-# GEMINI CLIENT (yeni google.genai SDK)
+# GEMINI CLIENT (new google.genai SDK)
 # ============================================================================
 _gemini_client = None
 try:
@@ -99,7 +99,7 @@ try:
 except Exception as e:
     logger.warning(f"⚠️ [GEMINI] Client initialization failed: {e}")
 
-# XAI yükle
+# Load XAI
 if ModelExplainer:
     try:
         xai_explainer = ModelExplainer(MODEL_PATH)
@@ -108,14 +108,14 @@ if ModelExplainer:
 else:
     xai_explainer = None
 
-# IPInfo yükle
+# Load IPInfo
 try:
     ipinfo_handler = ipinfo.getHandler(IPINFO_TOKEN)
 except:
     ipinfo_handler = None
 
 # =============================================================================
-# YARDIMCI FONKSİYONLAR
+# HELPER FUNCTIONS
 # =============================================================================
 def get_virustotal_data(domain: str):
     url = f"https://www.virustotal.com/api/v3/domains/{domain}"
@@ -126,7 +126,7 @@ def get_virustotal_data(domain: str):
             return response.json().get("data", {}).get("attributes", {}).get("last_analysis_stats", {})
     except:
         pass
-    return {"hata": "Veri bulunamadı"}
+    return {"hata": "Data not found"}
 
 def get_abuseipdb_data(ip: str):
     if not ip or ip == "N/A":
@@ -144,7 +144,7 @@ def get_abuseipdb_data(ip: str):
             }
     except:
         pass
-    return {"hata": "Veri bulunamadı"}
+    return {"hata": "Data not found"}
 
 def get_ip_from_domain(domain: str):
     domain = domain.replace("https://", "").replace("http://", "").split("/")[0]
@@ -277,7 +277,7 @@ def get_live_features_for_model(domain: str):
     return features, ip_address
 
 def get_kendi_risk_skorumuz(domain: str) -> dict:
-    if not model: return {"hata": "Model yüklenemedi"}
+    if not model: return {"hata": "Model could not be loaded"}
     try:
         live_features, ip = get_live_features_for_model(domain)
         df = pd.DataFrame([live_features])
@@ -304,7 +304,7 @@ def get_kendi_risk_skorumuz(domain: str) -> dict:
             "risk_skoru_yuzde":   f"{prob:.2f}%",
             "tespit_edilen_ip":   ip,
             "tespit_edilen_ulke": live_features['CountryCode'],
-            "xai_aciklama":       explanation_data if explanation_data else {"hata": "XAI yok", "top_features": []},
+            "xai_aciklama":       explanation_data if explanation_data else {"hata": "No XAI", "top_features": []},
             "model_input_df":     final_df
         }
     except Exception as e:
@@ -431,11 +431,11 @@ def llm_summarize(prompt: str) -> tuple[str | None, bool]:
     return None, True
 
 # =============================================================================
-# ANA ENDPOINT
+# MAIN ENDPOINT
 # =============================================================================
 @app.get("/enrich-and-summarize/domain/{domain_name}")
 def enrich_and_summarize_domain(domain_name: str):
-    logger.info(f"ANALIZ: {domain_name}")
+    logger.info(f"ANALYSIS: {domain_name}")
     start_time = time.time()
     
     mem   = memory_engine.get_domain_insights(domain_name)
@@ -512,17 +512,17 @@ Write a concise 3-sentence summary: verdict, evidence, and recommended action. D
         
     memory_engine.store_analysis(domain_name, response)
     
-    # Feature 2: IOC Pivot (DÖNGÜ KORUMALI)
+    # Feature 2: IOC Pivot (LOOP PROTECTED)
     ip = response["ham_veriler"]["kendi_modelimiz"].get("tespit_edilen_ip")
     if ip and ip != "N/A":
         try:
-            # 💡 ÇÖZÜM: DB geçmişine bakarak sonsuz döngü kontrolü yapıyoruz.
-            # Eğer son 5 dakika içinde bu IP üzerinden bir pivot çalıştıysa 
-            # veya aranan domain zaten incelenmişse pivotu tetiklemiyoruz.
+            # 💡 SOLUTION: Checking DB history for infinite loop prevention.
+            # If a pivot ran on this IP within the last 5 minutes 
+            # or the searched domain has already been analyzed, we do not trigger the pivot.
             conn = sqlite3.connect("chatsecops_memory.db")
             cursor = conn.cursor()
             
-            # chatsecops_memory.db şemasına uygun tablodan kontrol (Son 5 dakika)
+            # Check from the table matching chatsecops_memory.db schema (Last 5 minutes)
             cursor.execute("""
                 SELECT COUNT(*) FROM domain_analysis 
                 WHERE (domain = ? OR ip_address = ?) 
@@ -532,15 +532,15 @@ Write a concise 3-sentence summary: verdict, evidence, and recommended action. D
             already_analyzed_count = cursor.fetchone()[0]
             conn.close()
             
-            # bit.ly ile www.bit.ly varyasyonlarının birbirini sonsuz tetiklemesini engelleme kuralı
+            # Rule to prevent bit.ly and www.bit.ly variations from triggering each other infinitely
             base_domain = domain_name.replace("www.", "")
-            is_self_loop = any(k in base_domain for k in ["bit.ly"]) # Kritik altyapı/kısaltma istisnası
+            is_self_loop = any(k in base_domain for k in ["bit.ly"]) # Critical infrastructure/shortener exception
             
             if already_analyzed_count > 1 or (already_analyzed_count >= 1 and is_self_loop):
-                logger.info(f"[PIVOT] 🛑 Sonsuz döngü veya mükerrer analiz algılandı! Pivot engellendi: {domain_name} ({ip})")
+                logger.info(f"[PIVOT] 🛑 Infinite loop or duplicate analysis detected! Pivot blocked: {domain_name} ({ip})")
                 response["pivot_chain"] = {
                     "triggered": False, 
-                    "reason": "Sonsuz döngü (Loop Protection) koruması tetiklendi."
+                    "reason": "Infinite loop (Loop Protection) triggered."
                 }
             else:
                 pivot_result = pivot_engine.run_pivot(
@@ -557,25 +557,25 @@ Write a concise 3-sentence summary: verdict, evidence, and recommended action. D
                 if pivot_result["pivot_triggered"] and pivot_result["slack_message"]:
                     _send_pivot_to_slack(pivot_result["slack_message"])
         except Exception as e:
-            logger.error(f"[PIVOT] Pivot analizi başlatılamadı: {e}")
+            logger.error(f"[PIVOT] Failed to start pivot analysis: {e}")
             response["pivot_chain"] = {"triggered": False, "error": str(e)}
     else:
-        response["pivot_chain"] = {"triggered": False, "reason": "IP tespit edilemedi"}
+        response["pivot_chain"] = {"triggered": False, "reason": "IP could not be detected"}
         
     # Feature 5: MITRE ATT&CK
     try:
         mitre_result = mitre_mapper.map(response)
         response["mitre_attack"] = mitre_result
-        logger.info(f"[MITRE] {len(mitre_result['techniques'])} teknik eşleşti: {[t['technique_id'] for t in mitre_result['techniques']]}")
+        logger.info(f"[MITRE] {len(mitre_result['techniques'])} techniques matched: {[t['technique_id'] for t in mitre_result['techniques']]}")
     except Exception as e:
-        logger.error(f"[MITRE] Eşleştirme hatası: {e}")
+        logger.error(f"[MITRE] Mapping error: {e}")
         response["mitre_attack"] = {"techniques": [], "total_triggered": 0}
         
-    logger.info(f"✅ Analiz tamamlandı ({response['processing_time']}s) - AI Status: {response['ai_provider']}")
+    logger.info(f"✅ Analysis completed ({response['processing_time']}s) - AI Status: {response['ai_provider']}")
     return response
 
 # =============================================================================
-# DİĞER ENDPOINTLER
+# OTHER ENDPOINTS
 # =============================================================================
 @app.get("/")
 def read_root():
@@ -591,13 +591,13 @@ def _send_pivot_to_slack(message: str):
         try:
             requests.post(slack_webhook, json={"text": message}, timeout=5)
         except Exception as e:
-            logger.warning(f"[PIVOT] Slack webhook hatası: {e}")
+            logger.warning(f"[PIVOT] Slack webhook error: {e}")
     else:
-        logger.info("[PIVOT] Slack webhook bulunamadı, bot üzerinden iletilecek")
+        logger.info("[PIVOT] Slack webhook not found, will be routed via bot")
 
 @app.get("/pivot/{domain_name}")
 def get_pivot_chain(domain_name: str):
-    logger.info(f"[PIVOT] Manuel pivot isteği: {domain_name}")
+    logger.info(f"[PIVOT] Manual pivot request: {domain_name}")
     conn = sqlite3.connect("chatsecops_memory.db")
     cursor = conn.cursor()
     cursor.execute(
@@ -611,7 +611,7 @@ def get_pivot_chain(domain_name: str):
     if not ip or ip == "N/A":
         ip = get_ip_from_domain(domain_name)
     if not ip:
-        raise HTTPException(status_code=404, detail=f"{domain_name} için IP adresi tespit edilemedi.")
+        raise HTTPException(status_code=404, detail=f"IP address could not be detected for {domain_name}.")
         
     risk_score = 0.0
     conn = sqlite3.connect("chatsecops_memory.db")
@@ -632,17 +632,17 @@ def get_pivot_chain(domain_name: str):
     return {"domain": domain_name, "ip_address": ip, "pivot_result": pivot_result}
 
 # ============================================================================
-# FEATURE 1: PHISHING URL ANALİZİ
+# FEATURE 1: PHISHING URL ANALYSIS
 # ============================================================================
 @app.get("/analyze-url")
 def analyze_url(url: str):
-    logger.info(f"[URL] Gelen URL: {url}")
+    logger.info(f"[URL] Incoming URL: {url}")
     url_analysis     = url_parser.analyze(url)
     extracted_domain = url_analysis["extracted_domain"]
-    logger.info(f"[URL] Çıkarılan domain: {extracted_domain}")
+    logger.info(f"[URL] Extracted domain: {extracted_domain}")
     
     if not extracted_domain:
-        raise HTTPException(status_code=400, detail="URL'den domain çıkarılamadı.")
+        raise HTTPException(status_code=400, detail="Domain could not be extracted from the URL.")
         
     domain_result = enrich_and_summarize_domain(extracted_domain)
     try:
@@ -698,21 +698,21 @@ Findings:
     try:
         mitre_result = mitre_mapper.map(domain_result)
         domain_result["mitre_attack"] = mitre_result
-        logger.info(f"[MITRE/URL] {len(mitre_result['techniques'])} teknik eşleşti")
+        logger.info(f"[MITRE/URL] {len(mitre_result['techniques'])} techniques matched")
     except Exception as e:
-        logger.error(f"[MITRE/URL] Hata: {e}")
+        logger.error(f"[MITRE/URL] Error: {e}")
         
-    logger.info(f"[URL] Tamamlandı: ML={ml_score:.1f}% + URL={url_boost} = {combined_score:.1f}% ({combined_verdict})")
+    logger.info(f"[URL] Completed: ML={ml_score:.1f}% + URL={url_boost} = {combined_score:.1f}% ({combined_verdict})")
     return domain_result
 
 # ============================================================================
-# FEATURE 4: DOĞAL DİL SORGU ARAYÜZÜ
+# FEATURE 4: NATURAL LANGUAGE QUERY INTERFACE
 # ============================================================================
 @app.get("/agent/ask")
 def ask_ai_agent(query: str):
-    logger.info(f"🤖 AGENT SORGUSU: {query}")
+    logger.info(f"🤖 AGENT QUERY: {query}")
     if not query or not query.strip():
-        raise HTTPException(status_code=400, detail="Soru boş olamaz.")
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
         
     result = nl_query_engine.ask(query.strip())
     return {

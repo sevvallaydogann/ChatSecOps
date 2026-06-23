@@ -1,6 +1,6 @@
 """
-xai_explainer.py - FIXED VERSION
-ModelExplainer sınıfı eklendi
+xai_explainer.py 
+
 """
 import shap
 import matplotlib.pyplot as plt
@@ -8,7 +8,6 @@ import pandas as pd
 import os
 import joblib
 
-# Grafik arayüzü olmayan sunucularda hata almamak için
 plt.switch_backend('Agg') 
 
 
@@ -129,7 +128,6 @@ class ModelExplainer:
             return None
 
 
-# Backward compatibility: keep the old function
 def generate_shap_explanation(model, input_df, domain_name):
     """
     Legacy function - kept for backward compatibility
@@ -154,9 +152,9 @@ def generate_shap_explanation(model, input_df, domain_name):
         plt.close(fig)
         plt.close('all')
         
-        print(f"      [XAI] Grafik başarıyla oluşturuldu: {filename}")
+        print(f"      [XAI] Chart successfully generated: {filename}")
         return filename
     
     except Exception as e:
-        print(f"      ❌ [XAI HATASI] Grafik oluşturulamadı: {e}")
+        print(f"      ❌ [XAI ERROR] Failed to generate chart: {e}")
         return None

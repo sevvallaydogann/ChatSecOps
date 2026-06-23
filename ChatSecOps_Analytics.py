@@ -1,6 +1,6 @@
 """
-ChatSecOps_Analytics.py - ENGLISH VERSION
-All Turkish text replaced with English for international publication
+ChatSecOps_Analytics.py 
+
 """
 import os
 import matplotlib.pyplot as plt
