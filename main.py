@@ -653,7 +653,21 @@ def analyze_url(url: str):
         ml_score = 0.0
         
     url_boost      = url_analysis["url_risk_boost"]
-    combined_score = min(100.0, ml_score + url_boost)
+
+    # --- VT signal boost ---
+    vt_data    = domain_result.get("ham_veriler", {}).get("virustotal", {})
+    vt_mal     = vt_data.get("malicious", 0) if "hata" not in vt_data else 0
+    vt_total   = sum(vt_data.values()) if "hata" not in vt_data and vt_data else 1
+    vt_ratio   = vt_mal / vt_total if vt_total > 0 else 0
+    # Scale: 1 engine = ~5pts, 10+ engines = 50pts, caps at 60
+    vt_boost   = min(60, int(vt_ratio * 100 * 0.6 + (vt_mal * 3)))
+
+    # --- AbuseIPDB boost ---
+    abuse_data  = domain_result.get("ham_veriler", {}).get("abuseipdb", {})
+    abuse_score = abuse_data.get("abuseConfidenceScore", 0) or 0
+    abuse_boost = min(20, int(abuse_score * 0.2))  # max +20
+
+    combined_score = min(100.0, ml_score + url_boost + vt_boost + abuse_boost)
     url_risk_level = url_analysis["risk_level"]
     
     if url_risk_level == "CRITICAL" or combined_score >= 80:
@@ -670,8 +684,10 @@ def analyze_url(url: str):
     if url_analysis["findings"]:
         url_prompt = f"""You are a SOC analyst. Summarize these URL analysis findings in 2-3 sentences (English, professional):
 URL: {url}
-Domain Risk Score: {ml_score:.1f}%
+Domain ML Score: {ml_score:.1f}%
 URL Structural Risk Boost: +{url_boost}
+VirusTotal Boost: +{vt_boost} ({vt_mal} engines flagged malicious)
+AbuseIPDB Boost: +{abuse_boost} (confidence score: {abuse_score}%)
 Combined Final Score: {combined_score:.1f}%
 Findings:
 {chr(10).join(url_analysis["findings"])}"""
@@ -701,7 +717,7 @@ Findings:
     except Exception as e:
         logger.error(f"[MITRE/URL] Error: {e}")
         
-    logger.info(f"[URL] Completed: ML={ml_score:.1f}% + URL={url_boost} = {combined_score:.1f}% ({combined_verdict})")
+    logger.info(f"[URL] Completed: ML={ml_score:.1f}% + URL={url_boost} + VT={vt_boost} + Abuse={abuse_boost} = {combined_score:.1f}% ({combined_verdict})")
     return domain_result
 
 

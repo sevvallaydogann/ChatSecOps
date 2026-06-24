@@ -32,18 +32,15 @@ BACKEND_API = os.getenv("BACKEND_API_URL", "http://localhost:8000")
 
 
 def format_risk_message(data: dict) -> dict:
-    domain = data.get("domain", "Unknown")
+    domain      = data.get("domain", "Unknown")
+    is_url_scan = bool(data.get("url_analysis"))  # True when full URL was scanned
 
     # --- AI Summary ---
     ai_raw = data.get("ai_ozeti", {})
     if isinstance(ai_raw, dict):
-        verdict   = ai_raw.get("verdict", "UNKNOWN")
-        risk_score = ai_raw.get("risk_score", "N/A")
-        ai_text   = ai_raw.get("xai_output", "Analysis unavailable.")
+        ai_text = ai_raw.get("xai_output", "Analysis unavailable.")
     else:
-        verdict    = "ANALYZED"
-        risk_score = "See Below"
-        ai_text    = str(ai_raw)
+        ai_text = str(ai_raw)
 
     # --- Raw data ---
     raw        = data.get("ham_veriler", {})
@@ -56,33 +53,41 @@ def format_risk_message(data: dict) -> dict:
     detected_ip = model_data.get("tespit_edilen_ip", "N/A")
     country     = model_data.get("tespit_edilen_ulke", "Unknown")
 
-    # Feature 1: use combined score when available
-    if data.get("combined_score"):
-        ml_risk = data["combined_score"]
+    # --- Determine display score & verdict ---
+    if is_url_scan and data.get("combined_score"):
+        display_score = data["combined_score"]
+        score_label   = "Combined Risk Score"
+    else:
+        display_score = ml_risk
+        score_label   = "ML Risk Score"
 
-    # --- Risk colour & emoji ---
+    # --- Risk colour & emoji (verdict always derived from score) ---
     try:
-        risk_num = float(str(ml_risk).replace("%", ""))
-        if risk_num >= 80:
-            emoji, color = "🔴", "#d73a49"
-            verdict = data.get("combined_verdict", "CRITICAL")
-        elif risk_num >= 50:
-            emoji, color = "🟠", "#fb8500"
-            verdict = data.get("combined_verdict", "HIGH")
-        elif risk_num >= 20:
-            emoji, color = "🟡", "#ffb700"
-            verdict = data.get("combined_verdict", "MEDIUM")
-        else:
-            emoji, color = "🟢", "#28a745"
-            verdict = data.get("combined_verdict", "SAFE")
+        risk_num = float(str(display_score).replace("%", ""))
     except Exception:
-        emoji, color = "⚪", "#586069"
+        risk_num = 0.0
+
+    if risk_num >= 80:
+        emoji, color    = "🔴", "#d73a49"
+        display_verdict = "CRITICAL"
+    elif risk_num >= 50:
+        emoji, color    = "🟠", "#fb8500"
+        display_verdict = "HIGH"
+    elif risk_num >= 20:
+        emoji, color    = "🟡", "#ffb700"
+        display_verdict = "MEDIUM"
+    else:
+        emoji, color    = "🟢", "#28a745"
+        display_verdict = "SAFE"
+
+    # Allow backend to override verdict label if explicitly set
+    display_verdict = data.get("combined_verdict") or display_verdict
 
     # --- Intel feed statuses ---
     if "hata" not in vt_data and vt_data:
-        vt_mal   = vt_data.get("malicious", 0)
-        vt_total = sum(vt_data.values())
-        vt_icon  = "🔴" if vt_mal > 0 else "✅"
+        vt_mal    = vt_data.get("malicious", 0)
+        vt_total  = sum(vt_data.values())
+        vt_icon   = "🔴" if vt_mal > 0 else "✅"
         vt_status = f"{vt_icon} {vt_mal}/{vt_total} flagged"
     else:
         vt_status = "⚪ Data Unavailable"
@@ -97,27 +102,45 @@ def format_risk_message(data: dict) -> dict:
 
     sho = osint_data.get("shodan", {})
     if sho and not sho.get("error"):
-        ports     = len(sho.get("ports", []))
-        vulns     = len(sho.get("vulns", []))
-        sho_icon  = "⚠️" if vulns > 0 else "ℹ️"
+        ports      = len(sho.get("ports", []))
+        vulns      = len(sho.get("vulns", []))
+        sho_icon   = "⚠️" if vulns > 0 else "ℹ️"
         sho_status = f"{sho_icon} Ports: {ports} | Vulns: {vulns}"
     else:
         sho_status = "⚪ No IP Resolved" if (not detected_ip or detected_ip == "N/A") else "⚪ Not Found"
 
-    # Build blocks 
+    # --- Header: distinguish URL scan vs domain scan ---
+    if is_url_scan:
+        url_analysis  = data.get("url_analysis", {})
+        original_url  = url_analysis.get("original_url", domain)
+        header_text   = f"{emoji} URL Security Report: {original_url}"
+        # Show both scores so there is no confusion
+        ml_score_note = f"*Domain ML Score:*\n{ml_risk} _(domain only)_"
+        combined_note = f"*{score_label}:*\n{display_score} _(URL + domain)_"
+        score_fields  = [
+            {"type": "mrkdwn", "text": f"*Verdict:*\n{display_verdict}"},
+            {"type": "mrkdwn", "text": f"*{score_label}:*\n{display_score}"},
+            {"type": "mrkdwn", "text": ml_score_note},
+            {"type": "mrkdwn", "text": f"*IP Address:*\n`{detected_ip}` ({country})"},
+        ]
+    else:
+        header_text  = f"{emoji} Domain Security Report: {domain}"
+        score_fields = [
+            {"type": "mrkdwn", "text": f"*Verdict:*\n{display_verdict}"},
+            {"type": "mrkdwn", "text": f"*{score_label}:*\n{display_score}"},
+            {"type": "mrkdwn", "text": f"*IP Address:*\n`{detected_ip}`"},
+            {"type": "mrkdwn", "text": f"*Location:*\n{country}"},
+        ]
+
+    # --- Build blocks ---
     blocks = [
         {
             "type": "header",
-            "text": {"type": "plain_text", "text": f"{emoji} Security Report: {domain}", "emoji": True}
+            "text": {"type": "plain_text", "text": header_text, "emoji": True}
         },
         {
             "type": "section",
-            "fields": [
-                {"type": "mrkdwn", "text": f"*Verdict:*\n{verdict}"},
-                {"type": "mrkdwn", "text": f"*Risk Score:*\n{ml_risk}"},
-                {"type": "mrkdwn", "text": f"*IP Address:*\n`{detected_ip}`"},
-                {"type": "mrkdwn", "text": f"*Location:*\n{country}"},
-            ]
+            "fields": score_fields
         },
         {"type": "divider"},
         {
@@ -137,15 +160,19 @@ def format_risk_message(data: dict) -> dict:
         },
     ]
 
-    # Optional: live site screenshot
+    # Optional: live site screenshot — validate before adding to blocks
     try:
+        import requests as _req
         img_url = f"https://image.thum.io/get/width/600/crop/800/noanimate/http://{domain}"
-        blocks.append({
-            "type": "image",
-            "image_url": img_url,
-            "alt_text": "site_preview",
-            "title": {"type": "plain_text", "text": "🌍 Live Site Preview"}
-        })
+        r = _req.head(img_url, timeout=5, allow_redirects=True)
+        content_type = r.headers.get("Content-Type", "")
+        if r.status_code == 200 and "image" in content_type:
+            blocks.append({
+                "type": "image",
+                "image_url": img_url,
+                "alt_text": "site_preview",
+                "title": {"type": "plain_text", "text": "🌍 Live Site Preview"}
+            })
     except Exception:
         pass
 
@@ -169,7 +196,7 @@ def format_risk_message(data: dict) -> dict:
         blocks.append({"type": "actions", "elements": actions})
 
     return {
-        "text": f"Report for {domain}: {verdict}",
+        "text": f"Report for {domain}: {display_verdict}",
         "blocks": blocks,
         "attachments": [{"color": color, "blocks": []}],
     }
@@ -326,17 +353,18 @@ def analyze_domain(message, say):
     # Structured risk card
     say(**format_risk_message(data))
 
-    # URL structural findings
+    # URL structural findings — only show if there are meaningful findings
+    # Scores are already shown in the main risk card above, so we skip them here
     url_analysis = data.get("url_analysis")
     if url_analysis and url_analysis.get("findings"):
-        findings_text = "\n".join(f"  • {f}" for f in url_analysis["findings"][:5])
-        say(
-            f"🔗 *URL Structural Analysis*\n"
-            f"*Combined Score:* {data.get('combined_score', 'N/A')} "
-            f"({data.get('combined_verdict', 'N/A')})\n"
-            f"*URL Risk Level:* {url_analysis.get('url_risk_level', 'N/A')}\n"
-            f"*Findings:*\n{findings_text}"
-        )
+        url_risk_level = url_analysis.get("url_risk_level", "LOW")
+        if url_risk_level in ("HIGH", "CRITICAL", "MEDIUM"):  # skip LOW-only findings
+            findings_text = "\n".join(f"  • {f}" for f in url_analysis["findings"][:5])
+            say(
+                f"🔗 *URL Structural Findings*\n"
+                f"*URL Risk Level:* {url_risk_level}\n"
+                f"*Indicators:*\n{findings_text}"
+            )
 
     # Pivot chain notification
     pivot = data.get("pivot_chain", {})

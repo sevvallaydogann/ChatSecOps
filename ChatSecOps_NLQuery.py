@@ -2,9 +2,9 @@
 ChatSecOps_NLQuery.py - Natural Language Query Engine 
 =========================================================
 Translates the natural language question written by the user on Slack:
-  1. Converts to SQL using Gemini
+  1. Converts to SQL using Gemini (falls back to Groq if Gemini unavailable)
   2. Executes safely in SQLite
-  3. Converts the result into a readable English response using Gemini
+  3. Converts the result into a readable English response using Gemini/Groq
 
 Usage:
   from ChatSecOps_NLQuery import nl_query_engine
@@ -14,10 +14,16 @@ Usage:
 import sqlite3
 import logging
 import re
-import google.generativeai as genai
 import os
+import requests
 from datetime import datetime
 from dotenv import load_dotenv
+
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
 
 # Force load .env file at code level
 load_dotenv()
@@ -143,69 +149,99 @@ class NLQueryEngine:
     def __init__(self, db_path: str = "chatsecops_memory.db"):
         self.db_path = db_path
         self.gemini_model = None
-        self._init_gemini()
-    
-    def _init_gemini(self):
-        """Initialize Gemini model."""
-        try:
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                logger.error("[NLQUERY] GEMINI_API_KEY not found")
-                return
-            
-            genai.configure(api_key=api_key)
-            
-            # The most up-to-date and working stable model is added at the top
-            model_candidates = [
-                "models/gemini-2.5-flash",
-                "models/gemini-2.5-flash-preview-05-20",
-                "models/gemini-1.5-flash-latest",
-                "models/gemini-1.5-flash",
-                "models/gemini-pro"
-            ]
-            
-            for model_name in model_candidates:
-                try:
-                    m = genai.GenerativeModel(model_name)
-                    m.generate_content("test")
-                    self.gemini_model = m
-                    logger.info(f"✅ [NLQUERY] Gemini ready: {model_name}")
-                    break
-                except Exception:
-                    continue
-                    
-            if not self.gemini_model:
-                logger.error("[NLQUERY] No Gemini model could be loaded")
-                
-        except Exception as e:
-            logger.error(f"[NLQUERY] Gemini initialization error: {e}")
+        self.groq_api_key = None
+        self.llm_provider = None  # "gemini" | "groq" | None
+        self._init_llm()
+
+    def _init_llm(self):
+        """Initialize LLM: try Gemini first, fall back to Groq."""
+        # --- Try Gemini ---
+        if GEMINI_AVAILABLE:
+            try:
+                api_key = os.getenv("GEMINI_API_KEY")
+                if api_key:
+                    genai.configure(api_key=api_key)
+                    model_candidates = [
+                        "models/gemini-2.5-flash",
+                        "models/gemini-2.5-flash-preview-05-20",
+                        "models/gemini-1.5-flash-latest",
+                        "models/gemini-1.5-flash",
+                        "models/gemini-pro"
+                    ]
+                    for model_name in model_candidates:
+                        try:
+                            m = genai.GenerativeModel(model_name)
+                            m.generate_content("test")
+                            self.gemini_model = m
+                            self.llm_provider = "gemini"
+                            logger.info(f"✅ [NLQUERY] Gemini ready: {model_name}")
+                            return
+                        except Exception:
+                            continue
+            except Exception as e:
+                logger.warning(f"[NLQUERY] Gemini init failed: {e}")
+
+        # --- Fall back to Groq ---
+        groq_key = os.getenv("GROQ_API_KEY")
+        if groq_key:
+            self.groq_api_key = groq_key
+            self.llm_provider = "groq"
+            logger.info("✅ [NLQUERY] Groq fallback active (llama-3.3-70b-versatile)")
+        else:
+            logger.error("[NLQUERY] No LLM available — both Gemini and Groq failed/missing")
+
+    def _groq_generate(self, prompt: str) -> str:
+        """Call Groq API and return text response."""
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.groq_api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+            "max_tokens": 512
+        }
+        resp = requests.post(url, headers=headers, json=payload, timeout=30)
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
+    def _generate(self, prompt: str) -> str:
+        """Unified generate call — uses whichever provider is active."""
+        if self.llm_provider == "gemini" and self.gemini_model:
+            try:
+                return self.gemini_model.generate_content(prompt).text.strip()
+            except Exception as e:
+                logger.warning(f"[NLQUERY] Gemini call failed, trying Groq: {e}")
+                # Gemini went down mid-session — try Groq on the fly
+                groq_key = os.getenv("GROQ_API_KEY")
+                if groq_key:
+                    self.groq_api_key = groq_key
+                    self.llm_provider = "groq"
+                    return self._groq_generate(prompt)
+                raise
+        elif self.llm_provider == "groq" and self.groq_api_key:
+            return self._groq_generate(prompt)
+        else:
+            raise RuntimeError("No LLM provider available")
     
     def _generate_sql(self, user_question: str) -> str:
-        """
-        Give the schema + question to Gemini, generate SQL.
-        Returns: SQL string or None in case of an error
-        """
-        if not self.gemini_model:
+        """Give the schema + question to LLM, generate SQL."""
+        if not self.llm_provider:
             return None
-        
+
         prompt = f"""{DB_SCHEMA}
 
 User Question: "{user_question}"
 SQL Query:"""
-        
+
         try:
-            response = self.gemini_model.generate_content(prompt)
-            sql = response.text.strip()
-            
-            # Clear Markdown
+            sql = self._generate(prompt)
             sql = sql.replace("```sql", "").replace("```", "").strip()
-            
-            # Remove semicolon
             sql = sql.rstrip(";").strip()
-            
             logger.info(f"[NLQUERY] Generated SQL: {sql}")
             return sql
-            
         except Exception as e:
             logger.error(f"[NLQUERY] SQL generation error: {e}")
             return None
@@ -240,20 +276,18 @@ SQL Query:"""
             return None, str(e)
     
     def _format_response(self, user_question: str, rows: list, columns: list) -> str:
-        """
-        Convert raw database result into a readable response using Gemini.
-        """
-        if not self.gemini_model:
+        """Convert raw database result into a readable response using LLM."""
+        if not self.llm_provider:
             if not rows:
                 return "📭 No records found in the database for this query."
             return f"📊 Query result ({len(rows)} records):\n" + "\n".join(str(r) for r in rows[:10])
-        
+
         if not rows:
             return "📭 No records found in the database for this query."
-        
+
         display_rows = rows[:20]
         truncated = len(rows) > 20
-        
+
         prompt = f"""You are the SOC Assistant for ChatSecOps. Respond to the user by interpreting the database query results.
 
 User's Question: "{user_question}"
@@ -272,10 +306,9 @@ Please write your response according to these rules:
 - You can use emojis (📊 🔴 ⚠️ ✅)
 - Write only the response, do not add anything else
 """
-        
+
         try:
-            response = self.gemini_model.generate_content(prompt)
-            return response.text.strip()
+            return self._generate(prompt)
         except Exception as e:
             logger.error(f"[NLQUERY] Response formatting error: {e}")
             lines = [f"📊 *Query Result* ({len(rows)} records):"]
@@ -289,7 +322,7 @@ Please write your response according to these rules:
         """
         logger.info(f"[NLQUERY] Question: {user_question}")
         
-        if not self.gemini_model:
+        if not self.llm_provider:
             return {
                 "answer": "❌ AI model is currently not active. Please contact the system administrator.",
                 "sql": None,
@@ -315,16 +348,16 @@ Please write your response according to these rules:
 The user asked: "{user_question}"
 A technical error occurred while running the database query.
 Write a short, polite, English error message to the user. Do not provide SQL details."""
-                fallback = self.gemini_model.generate_content(fallback_prompt).text.strip()
+                fallback = self._generate(fallback_prompt)
                 return {
                     "answer": fallback,
                     "sql": sql,
                     "row_count": 0,
                     "success": False
                 }
-            except:
+            except Exception:
                 return {
-                    "answer": f"⚠️ An error occurred while executing the query. Try a different question.",
+                    "answer": "⚠️ An error occurred while executing the query. Try a different question.",
                     "sql": sql,
                     "row_count": 0,
                     "success": False
